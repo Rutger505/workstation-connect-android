@@ -350,3 +350,6 @@ tasks.named("generateLicenseReport") {
 tasks.named("preBuild") {
     dependsOn("generateLicenseReport")
 }
+
+// workstation-connect: all fork build changes live in wsconnect/wsconnect.gradle
+apply(from = "wsconnect/wsconnect.gradle")

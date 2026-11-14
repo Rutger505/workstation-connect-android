@@ -52,6 +52,7 @@ class KdeConnect : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        if (com.rutger.wsconnect.WsConnect.isHelperProcess(this)) return // workstation-connect: Shizuku helper process
         _instance = this
         setupSL4JLogging()
         Log.d("KdeConnect/Application", "onCreate")
@@ -63,6 +64,7 @@ class KdeConnect : Application() {
         NotificationHelper.initializeChannels(this)
         LifecycleHelper.initializeObserver()
         loadRememberedDevicesFromSettings()
+        com.rutger.wsconnect.WsConnect.init(this) // workstation-connect
 
         if (BuildConfig.DEBUG && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             val vmPolicyBuilder = VmPolicy.Builder(StrictMode.getVmPolicy())
