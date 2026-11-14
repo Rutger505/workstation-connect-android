@@ -54,6 +54,12 @@ class TetherControlService : ITetherControl.Stub {
         "OK stopTethering(${typeName(type)}) in ${ms(t0)} ms"
     }.getOrElse { "FAIL stopTethering: ${describe(it)}" }
 
+    override fun shell(command: String): String = runCatching {
+        val p = ProcessBuilder("sh", "-c", command).redirectErrorStream(true).start()
+        val out = p.inputStream.bufferedReader().readText().trim()
+        "exit ${p.waitFor()}${if (out.isEmpty()) "" else ": $out"}"
+    }.getOrElse { "FAIL ${describe(it)}" }
+
     override fun destroy() = exitProcess(0)
 
     private class Result(val ok: Boolean, val line: String)

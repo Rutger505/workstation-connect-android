@@ -85,6 +85,14 @@ object Tether {
         }
     }
 
+    /** Runs [command] as the shell uid via the Shizuku helper; [done] gets the result (worker thread). */
+    fun shell(command: String, done: (String) -> Unit) = worker.execute {
+        val c = control ?: return@execute done("FAIL no shizuku helper")
+        val r = runCatching { c.shell(command) }.getOrElse { "FAIL $it" }
+        AppLog.i("shell: $command → $r")
+        done(r)
+    }
+
     /** BT tethering first (fast), then the hotspot (fast enough for updates). */
     fun on() {
         wanted = true

@@ -20,6 +20,7 @@ object WsConnect {
 
     fun init(app: Application) {
         Tether.init(app)
+        Clipboard.init(app)
         if (linkEnabled(app)) LinkService.start(app)
     }
 

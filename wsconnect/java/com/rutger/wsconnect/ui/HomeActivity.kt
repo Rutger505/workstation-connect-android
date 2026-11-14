@@ -43,6 +43,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.app.NotificationManagerCompat
 import androidx.lifecycle.lifecycleScope
+import android.widget.Toast
+import androidx.preference.PreferenceManager
+import com.rutger.wsconnect.Clipboard
 import com.rutger.wsconnect.LinkService
 import com.rutger.wsconnect.Tether
 import com.rutger.wsconnect.WsConnect
@@ -60,7 +63,7 @@ import org.kde.kdeconnect.plugins.findremotedevice.FindRemoteDevicePlugin
 import org.kde.kdeconnect.plugins.notifications.NotificationsPlugin
 import org.kde.kdeconnect.plugins.share.SendFileActivity
 import org.kde.kdeconnect.ui.MainActivity
-import org.kde.kdeconnect.ui.PluginSettingsActivity
+import org.kde.kdeconnect.ui.SettingsFragment
 import org.kde.kdeconnect.ui.compose.KdeTheme
 import org.kde.kdeconnect_tp.BuildConfig
 
@@ -86,12 +89,16 @@ class HomeActivity : AppCompatActivity() {
         val laptop: Laptop?, val candidates: List<Candidate>, val setup: List<String>,
         val linkEnabled: Boolean, val shizukuReady: Boolean, val error: Boolean, val hotspot: Boolean,
         val bt: Boolean, val wanted: Boolean, val bleLaptop: Boolean, val notifyAccess: Boolean,
+        val autoClip: Boolean, val kdeBluetooth: Boolean,
     )
 
     private val ui = mutableStateOf<Ui?>(null) // set in onCreate: snapshot() needs a context
     private var poll: Job? = null
     private val bump: () -> Unit = { runOnUiThread { ui.value = snapshot() } }
     private val askPermissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { bump() }
+    private val askBtPermissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { r ->
+        if (r.values.all { it }) setKdeBluetooth(true) else bump()
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -107,6 +114,7 @@ class HomeActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         BackgroundService.ForceRefreshConnections(applicationContext)
+        Clipboard.defaultSkipSensitive(this)
         Tether.listen(bump)
         KdeConnect.getInstance().addDeviceListChangedCallback(TAG) { bump() }
         poll = lifecycleScope.launch { while (true) { bump(); delay(1000) } }
@@ -126,6 +134,7 @@ class HomeActivity : AppCompatActivity() {
         if (missing().isNotEmpty()) add(STEP_PERMISSIONS)
         if (!getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(packageName)) add(STEP_BATTERY)
         if (!Tether.shizukuRunning) add(STEP_SHIZUKU_START) else if (!Tether.shizukuAllowed) add(STEP_SHIZUKU_ALLOW)
+        else if (Tether.ready && !Clipboard.autoSync(this@HomeActivity)) add(STEP_AUTO_CLIP)
         laptop?.pluginsWithoutPermissions?.values?.sortedBy { it.displayName }?.forEach { add(STEP_PLUGIN + it.displayName) }
     }
 
@@ -150,6 +159,8 @@ class HomeActivity : AppCompatActivity() {
             hotspot = Tether.hotspotOn, bt = Tether.btTethered, wanted = Tether.wanted,
             bleLaptop = LinkService.laptopConnected,
             notifyAccess = NotificationManagerCompat.getEnabledListenerPackages(this).contains(packageName),
+            autoClip = Clipboard.autoSync(this),
+            kdeBluetooth = PreferenceManager.getDefaultSharedPreferences(this).getBoolean(SettingsFragment.KEY_BLUETOOTH_ENABLED, false),
         )
     }
 
@@ -172,6 +183,7 @@ class HomeActivity : AppCompatActivity() {
             if (s.setup.isNotEmpty()) Setup(s.setup)
             if (s.laptop == null) Pairing(s.candidates) else LaptopCard(s.laptop)
             InternetCard(s)
+            ConnectionCard(s)
             if (s.laptop != null) NotificationsCard(s.laptop, s.notifyAccess)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 TextButton({ startActivity(Intent(this@HomeActivity, LogActivity::class.java)) }) { Text("Log") }
@@ -236,6 +248,7 @@ class HomeActivity : AppCompatActivity() {
             OutlinedButton({ startActivity(ClipboardFloatingActivity.getIntent(this@HomeActivity, true)) }, enabled = l.reachable) {
                 Text("Klembord sturen")
             }
+            OutlinedButton({ startActivity(Intent(this@HomeActivity, ClipboardActivity::class.java)) }) { Text("Klembordgeschiedenis") }
             if (l.canRing) OutlinedButton({
                 device(l.id)?.getPlugin(FindRemoteDevicePlugin::class.java)?.getUiMenuEntries()?.firstOrNull()?.onClick?.invoke(this@HomeActivity)
             }, enabled = l.reachable) { Text("Laptop laten piepen") }
@@ -272,6 +285,22 @@ class HomeActivity : AppCompatActivity() {
     }
 
     @Composable
+    private fun ConnectionCard(s: Ui) = Section("Verbinding met laptop") {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Ook via Bluetooth", style = MaterialTheme.typography.bodyLarge)
+                Line("Meldingen, klembord en bestanden zonder gedeeld wifi (eduroam, trein). Langzamer dan wifi.")
+            }
+            Switch(s.kdeBluetooth, { on ->
+                if (on && BT_PERMISSIONS.any { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }) {
+                    askBtPermissions.launch(BT_PERMISSIONS)
+                } else setKdeBluetooth(on)
+            })
+        }
+        Line(if (s.autoClip) "Klembord: automatisch naar laptop" else "Klembord: alleen handmatig sturen")
+    }
+
+    @Composable
     private fun NotificationsCard(l: Laptop, access: Boolean) = Section("Meldingen") {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Doorsturen naar laptop", Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
@@ -279,7 +308,7 @@ class HomeActivity : AppCompatActivity() {
         }
         if (!l.notifyOn) return@Section
         if (!access) FilledTonalButton({ startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) }) { Text("Meldingtoegang geven") }
-        OutlinedButton({ startActivity(PluginSettingsActivity.createIntent(this@HomeActivity, l.id, NOTIFY_KEY)) }) { Text("Per app kiezen") }
+        OutlinedButton({ startActivity(Intent(this@HomeActivity, NotificationFilterActivity::class.java)) }) { Text("Per app kiezen") }
     }
 
     // ---- actions ----
@@ -298,12 +327,22 @@ class HomeActivity : AppCompatActivity() {
                     ?: Intent(Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/apps/details?id=$SHIZUKU"))
             )
             step == STEP_SHIZUKU_ALLOW -> Tether.requestPermission()
+            step == STEP_AUTO_CLIP -> Clipboard.enableAutoSync(applicationContext) { r ->
+                runOnUiThread { Toast.makeText(this, "Mislukt: $r", Toast.LENGTH_LONG).show() }
+            }
             step.startsWith(STEP_PLUGIN) -> {
                 val name = step.removePrefix(STEP_PLUGIN)
                 WsConnect.laptop(this)?.pluginsWithoutPermissions?.values?.firstOrNull { it.displayName == name }
                     ?.permissionExplanationDialog?.show(supportFragmentManager, null)
             }
         }
+    }
+
+    private fun setKdeBluetooth(on: Boolean) {
+        PreferenceManager.getDefaultSharedPreferences(this).edit()
+            .putBoolean(SettingsFragment.KEY_BLUETOOTH_ENABLED, on).apply()
+        BackgroundService.ForceRefreshConnections(applicationContext) // restarts BluetoothLinkProvider
+        bump()
     }
 
     private fun setLink(on: Boolean) {
@@ -320,8 +359,10 @@ class HomeActivity : AppCompatActivity() {
         const val STEP_BATTERY = "Batterijbeperking uitzetten"
         const val STEP_SHIZUKU_START = "Shizuku starten (draadloze foutopsporing)"
         const val STEP_SHIZUKU_ALLOW = "Shizuku-toestemming geven"
+        const val STEP_AUTO_CLIP = "Klembord automatisch delen (via Shizuku)"
         const val STEP_PLUGIN = "Rechten voor "
         val NOTIFY_KEY: String = Plugin.getPluginKey(NotificationsPlugin::class.java)
+        val BT_PERMISSIONS = arrayOf(Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_SCAN)
         val PERMISSIONS = listOf(
             Manifest.permission.BLUETOOTH_CONNECT,
             Manifest.permission.BLUETOOTH_ADVERTISE,
