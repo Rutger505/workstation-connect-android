@@ -1,0 +1,40 @@
+// workstation-connect additions to upstream KDE Connect, applied from the last line of build.gradle.kts.
+// Keep fork changes here (and in wsconnect/) so upstream merges stay small.
+
+def commitCount = providers.exec {
+    commandLine 'git', 'rev-list', '--count', 'HEAD'
+    ignoreExitValue = true
+}.standardOutput.asText.map { (it.trim() ?: '1') as int }
+
+android {
+    defaultConfig {
+        applicationId = 'com.rutger.wsconnect'
+        minSdk = 33 // TetheringManager (Shizuku tethering) + Application.getProcessName
+        versionCode = commitCount.get()
+        versionName = "${versionName}+ws${commitCount.get()}"
+    }
+    buildFeatures {
+        aidl = true
+    }
+    buildTypes {
+        debug {
+            // One app, one id: no ".debug" suffix (we ship the debug build).
+            applicationIdSuffix = null
+            versionNameSuffix = null
+        }
+    }
+    sourceSets {
+        main {
+            java.srcDir 'wsconnect/java'
+            kotlin.srcDir 'wsconnect/java' // AGP 9 built-in Kotlin doesn't pick up extra java dirs
+            aidl.srcDir 'wsconnect/aidl'
+            res.srcDir 'wsconnect/res'
+        }
+    }
+}
+
+dependencies {
+    implementation 'dev.rikka.shizuku:api:13.1.5'
+    implementation 'dev.rikka.shizuku:provider:13.1.5'
+    implementation 'org.lsposed.hiddenapibypass:hiddenapibypass:6.2'
+}

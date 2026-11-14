@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Is this fork behind upstream KDE Connect Android? Prints "merged <tag>" and "latest <tag>".
+# Exit 0 = up to date, 1 = behind, 2 = error. Release tags look like v1.37.3.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+git remote get-url upstream >/dev/null 2>&1 \
+  || git remote add upstream https://invent.kde.org/network/kdeconnect-android.git
+git fetch -q upstream --tags || { echo "fetch upstream failed" >&2; exit 2; }
+
+latest=$(git tag -l 'v[0-9]*' | grep -E '^v[0-9]+(\.[0-9]+)+$' | sort -V | tail -1)
+merged=$(git tag -l 'v[0-9]*' --merged HEAD | grep -E '^v[0-9]+(\.[0-9]+)+$' | sort -V | tail -1)
+echo "merged $merged"
+echo "latest $latest"
+[[ "$merged" == "$latest" ]] || exit 1
