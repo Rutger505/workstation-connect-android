@@ -13,6 +13,9 @@ notifications, clipboard, files). Laptop side: [Rutger505/workstation-connect](h
   - `src/main/AndroidManifest.xml`: launcher moved to `HomeActivity`, one block of our components
   - `src/main/java/org/kde/kdeconnect/KdeConnect.kt`: helper-process guard + `WsConnect.init`
   - `src/main/java/org/kde/kdeconnect/plugins/clipboard/ClipboardListener.kt`: `setText` → `Clipboard.fromLaptop` (history)
+- Upstream files deleted: laptop→phone mouse/keyboard receivers (`plugins/{mousereceiver,remotekeyboard,remotekeyboardime,inputdevicesreceiver}`,
+  `KdeConnectAccessibilityService.kt`, the IME test); `wsconnect.gradle` strips their manifest services. Unwanted (scrcpy types on the phone);
+  deleted, not excluded, because KSP's plugin index ignores source-set excludes
 - Rebrand "KDE Connect" → "Workstation Connect" happens at build time in `wsconnect.gradle` (generated res
   overlay of every upstream string containing it, all locales + merged-manifest label rewrite); never edit upstream strings
 - App id `com.rutger.wsconnect`, versionCode = commit count, we ship the debug build
@@ -26,7 +29,7 @@ merged and latest upstream tags (exit 1 when behind). Update:
 ```sh
 git fetch upstream --tags
 git switch -c upstream-vX.Y.Z
-git merge vX.Y.Z            # conflicts only in the 4 files above
+git merge vX.Y.Z            # conflicts only in the 4 files above; modify/delete on the dropped receivers: git rm them again
 ./gradlew assembleDebug
 ```
 

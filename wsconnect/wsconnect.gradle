@@ -1,6 +1,13 @@
 // workstation-connect additions to upstream KDE Connect, applied from the last line of build.gradle.kts.
 // Keep fork changes here (and in wsconnect/) so upstream merges stay small.
 
+// Upstream's laptop→phone mouse/keyboard receivers are deleted from the fork (scrcpy covers typing).
+// Their manifest services are stripped from the merged manifest so nothing dangles.
+ext.wsDroppedServices = [
+    'org.kde.kdeconnect.KdeConnectAccessibilityService',
+    'org.kde.kdeconnect.plugins.remotekeyboardime.RemoteKeyboardService',
+]
+
 def commitCount = providers.exec {
     commandLine 'git', 'rev-list', '--count', 'HEAD'
     ignoreExitValue = true
@@ -74,10 +81,16 @@ abstract class WsRebrandRes extends DefaultTask {
 }
 abstract class WsRebrandManifest extends DefaultTask {
     @InputFile abstract RegularFileProperty getMergedManifest()
+    @Input abstract ListProperty<String> getDroppedServices()
     @OutputFile abstract RegularFileProperty getUpdatedManifest()
     @TaskAction void run() {
-        updatedManifest.get().asFile.write(
-            mergedManifest.get().asFile.getText('UTF-8').replace('android:label="KDE Connect"', 'android:label="Workstation Connect"'), 'UTF-8')
+        def xml = mergedManifest.get().asFile.getText('UTF-8').replace('android:label="KDE Connect"', 'android:label="Workstation Connect"')
+        droppedServices.get().each { name ->
+            def re = ~/(?s)<service\s[^>]*?android:name="${java.util.regex.Pattern.quote(name)}".*?<\/service>/
+            if (!(xml =~ re).find()) throw new GradleException("wsconnect: service $name not in merged manifest (upstream changed?)")
+            xml = xml.replaceAll(re, '')
+        }
+        updatedManifest.get().asFile.write(xml, 'UTF-8')
     }
 }
 androidComponents {
@@ -90,7 +103,9 @@ androidComponents {
         // apply-from scripts can't see AGP classes: load SingleArtifact.MERGED_MANIFEST reflectively
         def mergedManifest = variant.class.classLoader
             .loadClass('com.android.build.api.artifact.SingleArtifact$MERGED_MANIFEST').getField('INSTANCE').get(null)
-        def man = tasks.register("wsconnectRebrandManifest${cap}", WsRebrandManifest)
+        def man = tasks.register("wsconnectRebrandManifest${cap}", WsRebrandManifest) {
+            droppedServices.set(wsDroppedServices)
+        }
         variant.artifacts.use(man)
             .wiredWithFiles({ it.mergedManifest }, { it.updatedManifest })
             .toTransform(mergedManifest)
