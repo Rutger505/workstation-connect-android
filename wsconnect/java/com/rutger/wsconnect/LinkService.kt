@@ -48,21 +48,25 @@ class LinkService : Service() {
     private var server: BluetoothGattServer? = null
     private var stateChar: BluetoothGattCharacteristic? = null
     private var advertising = false
-    // Touched from binder threads (GATT callbacks) and main.
-    private val connected: MutableSet<BluetoothDevice> = ConcurrentHashMap.newKeySet()
+    // Main thread only. Any LE link to the phone (watch, earbuds, ...) shows up as a GATT server
+    // connection, so a device only counts as the laptop once it's bonded and subscribed to our
+    // state characteristic, which the laptop daemon does on every connect.
     private val subscribed: MutableSet<BluetoothDevice> = ConcurrentHashMap.newKeySet()
     private var battery = 0
     private var signal = 255
     private var lastSent: ByteArray? = null
 
     private val goneTimeout = Runnable {
-        if (Tether.wanted && connected.isEmpty()) {
+        if (Tether.wanted && subscribed.isEmpty()) {
             AppLog.i("laptop gone ${GONE_TIMEOUT_MS / 60000} min: tethering off")
             Tether.off()
         }
     }
 
-    private val tetherListener: () -> Unit = { main.post(::pushState) }
+    private val tetherListener: () -> Unit = { main.post { pushState(); checkShizuku() } }
+
+    private val shizukuWarning = Runnable(::showShizukuWarning)
+    private var shizukuWarned = false
 
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(c: Context, intent: Intent) {
@@ -105,6 +109,7 @@ class LinkService : Service() {
         }.onFailure { AppLog.i("signal listener: $it") }
         Tether.listen(tetherListener)
         Tether.bind()
+        checkShizuku()
         if (bt.adapter?.isEnabled == true) startGatt() else AppLog.i("bluetooth is off: waiting")
     }
 
@@ -114,6 +119,8 @@ class LinkService : Service() {
         running = false
         laptopConnected = false
         main.removeCallbacks(goneTimeout)
+        main.removeCallbacks(shizukuWarning)
+        cancelShizukuWarning()
         Tether.unlisten(tetherListener)
         runCatching { unregisterReceiver(receiver) }
         runCatching { getSystemService(TelephonyManager::class.java).unregisterTelephonyCallback(signalCallback) }
@@ -174,7 +181,6 @@ class LinkService : Service() {
         runCatching { server?.close() }
         server = null
         stateChar = null
-        connected.clear()
         subscribed.clear()
         laptopConnected = false
     }
@@ -191,16 +197,10 @@ class LinkService : Service() {
 
         private fun connectionChanged(device: BluetoothDevice, newState: Int) {
             if (newState == BluetoothProfile.STATE_CONNECTED) {
-                connected += device
-                laptopConnected = true
-                main.removeCallbacks(goneTimeout)
-                AppLog.i("laptop connected: ${device.address} bond=${device.bondState}")
+                AppLog.i("ble connected: ${device.address} bond=${device.bondState}")
             } else {
-                connected -= device
-                subscribed -= device
-                laptopConnected = connected.isNotEmpty()
-                AppLog.i("laptop disconnected: ${device.address}")
-                if (connected.isEmpty() && Tether.wanted) main.postDelayed(goneTimeout, GONE_TIMEOUT_MS)
+                AppLog.i("ble disconnected: ${device.address}")
+                setSubscribed(device, false)
             }
         }
 
@@ -239,12 +239,27 @@ class LinkService : Service() {
             preparedWrite: Boolean, responseNeeded: Boolean, offset: Int, value: ByteArray?,
         ) {
             val enable = value?.contentEquals(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE) == true
-            main.post {
-                if (enable) subscribed += device else subscribed -= device
-                lastSent = null
-                pushState()
-            }
+            main.post { setSubscribed(device, enable) }
             if (responseNeeded) server?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, null)
+        }
+    }
+
+    /** Main thread only. Tracks the laptop (bonded subscriber) and arms the gone timeout. */
+    private fun setSubscribed(device: BluetoothDevice, on: Boolean) {
+        if (on && device.bondState != BluetoothDevice.BOND_BONDED) {
+            return AppLog.i("ignored subscribe from unbonded ${device.address}")
+        }
+        val changed = if (on) subscribed.add(device) else subscribed.remove(device)
+        if (!changed) return
+        laptopConnected = subscribed.isNotEmpty()
+        if (on) {
+            main.removeCallbacks(goneTimeout)
+            AppLog.i("laptop connected: ${device.address}")
+            lastSent = null
+            pushState()
+        } else {
+            AppLog.i("laptop disconnected: ${device.address}")
+            if (subscribed.isEmpty() && Tether.wanted) main.postDelayed(goneTimeout, GONE_TIMEOUT_MS)
         }
     }
 
@@ -268,6 +283,44 @@ class LinkService : Service() {
         subscribed.forEach { s.notifyCharacteristicChanged(it, c, false, value) }
     }
 
+    /** Main thread only. Warns when the auto hotspot can't work; debounced so app start doesn't flash it. */
+    private fun checkShizuku() {
+        main.removeCallbacks(shizukuWarning)
+        if (Tether.ready) cancelShizukuWarning() else main.postDelayed(shizukuWarning, SHIZUKU_GRACE_MS)
+    }
+
+    private fun showShizukuWarning() {
+        if (Tether.ready) return
+        val text = when {
+            !Tether.shizukuRunning -> "Shizuku draait niet. Start het via draadloze foutopsporing (wifi nodig)."
+            !Tether.shizukuAllowed -> "Workstation Connect heeft geen Shizuku-toestemming."
+            else -> "Shizuku-helper niet verbonden. Open de app."
+        }
+        if (!shizukuWarned) AppLog.i("shizuku warning: $text")
+        shizukuWarned = true
+        val nm = getSystemService(NotificationManager::class.java)
+        nm.createNotificationChannel(NotificationChannel("shizuku", "Shizuku-waarschuwing", NotificationManager.IMPORTANCE_DEFAULT))
+        // Not running: Shizuku's own app is where it gets started. Otherwise our home screen fixes it.
+        val target = if (!Tether.shizukuRunning) packageManager.getLaunchIntentForPackage(SHIZUKU_PACKAGE) else null
+        val open = PendingIntent.getActivity(this, 1, target ?: Intent(this, HomeActivity::class.java),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        nm.notify(SHIZUKU_NOTIFICATION_ID, Notification.Builder(this, "shizuku")
+            .setSmallIcon(android.R.drawable.stat_sys_warning)
+            .setContentTitle("Automatische hotspot werkt niet")
+            .setContentText(text)
+            .setStyle(Notification.BigTextStyle().bigText(text))
+            .setContentIntent(open)
+            .setOnlyAlertOnce(true)
+            .setOngoing(true)
+            .build())
+    }
+
+    private fun cancelShizukuWarning() {
+        if (shizukuWarned) AppLog.i("shizuku warning cleared")
+        shizukuWarned = false
+        getSystemService(NotificationManager::class.java).cancel(SHIZUKU_NOTIFICATION_ID)
+    }
+
     private fun notification(): Notification {
         val nm = getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(NotificationChannel("link", "Verbinding met laptop", NotificationManager.IMPORTANCE_MIN))
@@ -284,6 +337,9 @@ class LinkService : Service() {
     companion object {
         const val GONE_TIMEOUT_MS = 3 * 60_000L
         const val NOTIFICATION_ID = 7701 // KDE Connect's BackgroundService uses 1
+        const val SHIZUKU_NOTIFICATION_ID = 7702
+        const val SHIZUKU_GRACE_MS = 15_000L
+        const val SHIZUKU_PACKAGE = "moe.shizuku.privileged.api"
         @Volatile var running = false; private set
         /** A laptop is connected over BLE right now. */
         @Volatile var laptopConnected = false; private set
