@@ -62,7 +62,6 @@ import org.kde.kdeconnect.plugins.clipboard.ClipboardFloatingActivity
 import org.kde.kdeconnect.plugins.findremotedevice.FindRemoteDevicePlugin
 import org.kde.kdeconnect.plugins.notifications.NotificationsPlugin
 import org.kde.kdeconnect.plugins.share.SendFileActivity
-import org.kde.kdeconnect.ui.MainActivity
 import org.kde.kdeconnect.ui.SettingsFragment
 import org.kde.kdeconnect.ui.compose.KdeTheme
 import org.kde.kdeconnect_tp.BuildConfig
@@ -187,7 +186,7 @@ class HomeActivity : AppCompatActivity() {
             if (s.laptop != null) NotificationsCard(s.laptop, s.notifyAccess)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 TextButton({ startActivity(Intent(this@HomeActivity, LogActivity::class.java)) }) { Text("Log") }
-                TextButton({ startActivity(Intent(this@HomeActivity, MainActivity::class.java)) }) { Text("Geavanceerde instellingen") }
+                TextButton({ startActivity(HomeRedirect.advancedIntent(this@HomeActivity)) }) { Text("Geavanceerde instellingen") }
             }
         }
     }

@@ -99,6 +99,7 @@ class MainActivity : AppCompatActivity(), OnSharedPreferenceChangeListener {
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+        if (com.rutger.wsconnect.ui.HomeRedirect.toHome(this, savedInstanceState)) return // workstation-connect
         DeviceHelper.initializeDeviceId(this)
 
         val root = binding.root
