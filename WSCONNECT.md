@@ -12,6 +12,7 @@ notifications, clipboard, files). Laptop side: [Rutger505/workstation-connect](h
   - `build.gradle.kts`: last line applies `wsconnect/wsconnect.gradle`
   - `src/main/AndroidManifest.xml`: launcher moved to `HomeActivity`, one block of our components
   - `src/main/java/org/kde/kdeconnect/KdeConnect.kt`: helper-process guard + `WsConnect.init`
+  - `src/main/java/org/kde/kdeconnect/plugins/clipboard/ClipboardListener.kt`: `setText` → `Clipboard.fromLaptop` (history)
 - App id `com.rutger.wsconnect`, versionCode = commit count, we ship the debug build
   (signed with upstream's `debug.keystore`, so updates install over each other).
 
@@ -23,7 +24,7 @@ merged and latest upstream tags (exit 1 when behind). Update:
 ```sh
 git fetch upstream --tags
 git switch -c upstream-vX.Y.Z
-git merge vX.Y.Z            # conflicts only in the 3 files above
+git merge vX.Y.Z            # conflicts only in the 4 files above
 ./gradlew assembleDebug
 ```
 
