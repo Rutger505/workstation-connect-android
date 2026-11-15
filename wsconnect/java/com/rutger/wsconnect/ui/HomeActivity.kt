@@ -59,7 +59,6 @@ import org.kde.kdeconnect.PairingHandler.PairState
 import org.kde.kdeconnect.plugins.Plugin
 import org.kde.kdeconnect.plugins.battery.BatteryPlugin
 import org.kde.kdeconnect.plugins.clipboard.ClipboardFloatingActivity
-import org.kde.kdeconnect.plugins.findremotedevice.FindRemoteDevicePlugin
 import org.kde.kdeconnect.plugins.notifications.NotificationsPlugin
 import org.kde.kdeconnect.plugins.share.SendFileActivity
 import org.kde.kdeconnect.ui.SettingsFragment
@@ -77,7 +76,7 @@ class HomeActivity : AppCompatActivity() {
     @Immutable
     data class Laptop(
         val id: String, val name: String, val reachable: Boolean, val battery: Int?, val charging: Boolean,
-        val canRing: Boolean, val notifyOn: Boolean, val others: List<Pair<String, String>>,
+        val notifyOn: Boolean, val others: List<Pair<String, String>>,
     )
 
     @Immutable
@@ -145,7 +144,6 @@ class HomeActivity : AppCompatActivity() {
             Laptop(
                 id = it.deviceId, name = it.name, reachable = it.isReachable,
                 battery = battery?.currentCharge, charging = battery?.isCharging == true,
-                canRing = it.getPlugin(FindRemoteDevicePlugin::class.java) != null,
                 notifyOn = it.isPluginEnabled(NOTIFY_KEY),
                 others = all.filter { o -> o.isPaired && o.deviceId != it.deviceId }.map { o -> o.deviceId to o.name },
             )
@@ -248,9 +246,6 @@ class HomeActivity : AppCompatActivity() {
                 Text("Klembord sturen")
             }
             OutlinedButton({ startActivity(Intent(this@HomeActivity, ClipboardActivity::class.java)) }) { Text("Klembordgeschiedenis") }
-            if (l.canRing) OutlinedButton({
-                device(l.id)?.getPlugin(FindRemoteDevicePlugin::class.java)?.getUiMenuEntries()?.firstOrNull()?.onClick?.invoke(this@HomeActivity)
-            }, enabled = l.reachable) { Text("Laptop laten piepen") }
         }
         l.others.forEach { (id, name) ->
             TextButton({ WsConnect.setLaptop(this@HomeActivity, id); bump() }) { Text("Wissel naar $name") }
