@@ -69,7 +69,7 @@ import org.kde.kdeconnect_tp.BuildConfig
 
 /**
  * workstation-connect's own home screen (launcher). Everything Rutger uses daily is here; upstream
- * KDE Connect screens are only reached for deep settings ("KDE Connect-instellingen").
+ * KDE Connect screens are only reached for deep settings ("Geavanceerde instellingen").
  * UI renders an immutable [Ui] snapshot; listeners + a 1 s poll rebuild it (equal snapshot = no recompose).
  * Actions look devices up by id again, never hold Device objects across ticks.
  */
@@ -187,7 +187,7 @@ class HomeActivity : AppCompatActivity() {
             if (s.laptop != null) NotificationsCard(s.laptop, s.notifyAccess)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 TextButton({ startActivity(Intent(this@HomeActivity, LogActivity::class.java)) }) { Text("Log") }
-                TextButton({ startActivity(Intent(this@HomeActivity, MainActivity::class.java)) }) { Text("KDE Connect-instellingen") }
+                TextButton({ startActivity(Intent(this@HomeActivity, MainActivity::class.java)) }) { Text("Geavanceerde instellingen") }
             }
         }
     }
@@ -216,7 +216,7 @@ class HomeActivity : AppCompatActivity() {
     @Composable
     private fun Pairing(candidates: List<Candidate>) = Section("Laptop koppelen") {
         if (candidates.isEmpty()) {
-            Line("Geen laptop gevonden. Start kdeconnectd op je laptop. Zitten jullie niet op hetzelfde netwerk, voeg dan het Tailscale-IP van je laptop toe via KDE Connect-instellingen → Apparaat toevoegen via IP.")
+            Line("Geen laptop gevonden. Start kdeconnectd op je laptop. Zitten jullie niet op hetzelfde netwerk, voeg dan het Tailscale-IP van je laptop toe via Geavanceerde instellingen → Apparaat toevoegen via IP.")
         }
         candidates.forEach { c ->
             Row(verticalAlignment = Alignment.CenterVertically) {

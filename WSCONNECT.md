@@ -13,6 +13,8 @@ notifications, clipboard, files). Laptop side: [Rutger505/workstation-connect](h
   - `src/main/AndroidManifest.xml`: launcher moved to `HomeActivity`, one block of our components
   - `src/main/java/org/kde/kdeconnect/KdeConnect.kt`: helper-process guard + `WsConnect.init`
   - `src/main/java/org/kde/kdeconnect/plugins/clipboard/ClipboardListener.kt`: `setText` → `Clipboard.fromLaptop` (history)
+- Rebrand "KDE Connect" → "Workstation Connect" happens at build time in `wsconnect.gradle` (generated res
+  overlay of every upstream string containing it, all locales + merged-manifest label rewrite); never edit upstream strings
 - App id `com.rutger.wsconnect`, versionCode = commit count, we ship the debug build
   (signed with upstream's `debug.keystore`, so updates install over each other).
 

@@ -38,3 +38,61 @@ dependencies {
     implementation 'dev.rikka.shizuku:provider:13.1.5'
     implementation 'org.lsposed.hiddenapibypass:hiddenapibypass:6.2'
 }
+
+// Rebrand to "Workstation Connect" without touching upstream res/manifest:
+// - every upstream string containing "KDE Connect" (all locales, plus src/debug's "Debug KDE Connect")
+//   is regenerated into a generated res dir, which the variant API merges above all source sets
+// - hardcoded "KDE Connect" labels in the merged manifest are rewritten
+abstract class WsRebrandRes extends DefaultTask {
+    @InputFiles abstract ConfigurableFileCollection getResDirs()
+    @OutputDirectory abstract DirectoryProperty getOutputDir()
+    @TaskAction void run() {
+        def out = outputDir.get().asFile
+        out.deleteDir()
+        def merged = [:] // values dir name -> [string name -> xml], later dirs win
+        resDirs.files.each { res ->
+            res.eachDirMatch(~/values.*/) { dir ->
+                def f = new File(dir, 'strings.xml')
+                if (!f.exists()) return
+                // whole-file regex: some locale files are a single line
+                (f.getText('UTF-8') =~ /(?s)<string\s[^>]*?name="([^"]+)"[^>]*>(?:(?!<\/string>).)*?KDE Connect(?:(?!<\/string>).)*?<\/string>/).each { m ->
+                    merged.get(dir.name, [:])[m[1]] = m[0]
+                }
+                // app name is translated in some locales (KDEConnect, KDE-anslut, ...): always ours
+                if (f.getText('UTF-8') =~ /name="kde_connect"/)
+                    merged.get(dir.name, [:])['kde_connect'] = '<string name="kde_connect">Workstation Connect</string>'
+            }
+        }
+        merged.each { dirName, strings ->
+            def target = new File(out, "${dirName}/strings.xml")
+            target.parentFile.mkdirs()
+            target.write('<?xml version="1.0" encoding="utf-8"?>\n<resources>\n' +
+                strings.values().collect { it.replace('Debug KDE Connect', 'Workstation Connect').replace('KDE Connect', 'Workstation Connect') }.join('\n') +
+                '\n</resources>\n', 'UTF-8')
+        }
+    }
+}
+abstract class WsRebrandManifest extends DefaultTask {
+    @InputFile abstract RegularFileProperty getMergedManifest()
+    @OutputFile abstract RegularFileProperty getUpdatedManifest()
+    @TaskAction void run() {
+        updatedManifest.get().asFile.write(
+            mergedManifest.get().asFile.getText('UTF-8').replace('android:label="KDE Connect"', 'android:label="Workstation Connect"'), 'UTF-8')
+    }
+}
+androidComponents {
+    onVariants(selector().all()) { variant ->
+        def cap = variant.name.capitalize()
+        def res = tasks.register("wsconnectRebrandRes${cap}", WsRebrandRes) {
+            resDirs.from(file('src/main/res'), file("src/${variant.buildType}/res"))
+        }
+        variant.sources.res.addGeneratedSourceDirectory(res, { it.outputDir })
+        // apply-from scripts can't see AGP classes: load SingleArtifact.MERGED_MANIFEST reflectively
+        def mergedManifest = variant.class.classLoader
+            .loadClass('com.android.build.api.artifact.SingleArtifact$MERGED_MANIFEST').getField('INSTANCE').get(null)
+        def man = tasks.register("wsconnectRebrandManifest${cap}", WsRebrandManifest)
+        variant.artifacts.use(man)
+            .wiredWithFiles({ it.mergedManifest }, { it.updatedManifest })
+            .toTransform(mergedManifest)
+    }
+}
