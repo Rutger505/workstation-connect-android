@@ -3,7 +3,6 @@ package com.rutger.wsconnect
 
 import android.annotation.SuppressLint
 import android.app.Notification
-import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
@@ -33,6 +32,7 @@ import android.telephony.SignalStrength
 import android.telephony.TelephonyCallback
 import android.telephony.TelephonyManager
 import com.rutger.wsconnect.ui.HomeActivity
+import org.kde.kdeconnect.helpers.NotificationHelper
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -299,12 +299,11 @@ class LinkService : Service() {
         if (!shizukuWarned) AppLog.i("shizuku warning: $text")
         shizukuWarned = true
         val nm = getSystemService(NotificationManager::class.java)
-        nm.createNotificationChannel(NotificationChannel("shizuku", "Shizuku-waarschuwing", NotificationManager.IMPORTANCE_DEFAULT))
         // Not running: Shizuku's own app is where it gets started. Otherwise our home screen fixes it.
         val target = if (!Tether.shizukuRunning) packageManager.getLaunchIntentForPackage(SHIZUKU_PACKAGE) else null
         val open = PendingIntent.getActivity(this, 1, target ?: Intent(this, HomeActivity::class.java),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-        nm.notify(SHIZUKU_NOTIFICATION_ID, Notification.Builder(this, "shizuku")
+        nm.notify(SHIZUKU_NOTIFICATION_ID, Notification.Builder(this, NotificationHelper.Channels.DEFAULT)
             .setSmallIcon(android.R.drawable.stat_sys_warning)
             .setContentTitle("Automatische hotspot werkt niet")
             .setContentText(text)
@@ -322,10 +321,10 @@ class LinkService : Service() {
     }
 
     private fun notification(): Notification {
-        val nm = getSystemService(NotificationManager::class.java)
-        nm.createNotificationChannel(NotificationChannel("link", "Verbinding met laptop", NotificationManager.IMPORTANCE_MIN))
+        // Upstream channels only: KdeConnect.onCreate deletes every unlisted channel, which throws
+        // (crash loop) while our foreground service still uses it.
         val open = PendingIntent.getActivity(this, 0, Intent(this, HomeActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
-        return Notification.Builder(this, "link")
+        return Notification.Builder(this, NotificationHelper.Channels.PERSISTENT)
             .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
             .setContentTitle("Workstation Connect")
             .setContentText("Wacht op laptop")
