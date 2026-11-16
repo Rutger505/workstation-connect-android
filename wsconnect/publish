@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+# Publish the debug APK to the CDN for the in-app updater (wsconnect/java/.../update/Updater.kt).
+#
+#   wsconnect/publish [apk]     default: build/outputs/apk/debug/kdeconnect-android-debug.apk
+#   DRY_RUN=1 wsconnect/publish  all checks, prints the mcli commands instead of running them
+#
+# Order, so version.json never points at a missing or partial file:
+#   workstation-connect-<versionCode>.apk   uploaded once (what the app downloads, never overwritten)
+#   workstation-connect.apk                 server-side copy of it (stable link for manual installs)
+#   version.json                            {versionCode, versionName, apk, sha256, size}
+# Each one is verified by downloading it again. Refuses -dirty / -local builds and versionCodes not
+# newer than the published one. Keeps the newest 3 versioned APKs.
+#
+# Server-side copy: mcli cp rcdn/... rcdn/... (same alias) does CopyObject, no second ~60 MB upload
+# (big uploads have OOM'd the SeaweedFS VM). --disable-multipart: mc otherwise switches to
+# ComposeObject (multipart UploadPartCopy) at >= 64 MiB.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+APK="${1:-$ROOT/build/outputs/apk/debug/kdeconnect-android-debug.apk}"
+DEST="${WSCONNECT_CDN_DEST:-rcdn/artifacts/workstation-connect}"
+URL="${WSCONNECT_CDN_URL:-https://cdn.rutgerpronk.com/artifacts/workstation-connect}"
+ANDROID_HOME="${ANDROID_HOME:-$HOME/.local/share/android-sdk}"
+AAPT2="$(ls -d "$ANDROID_HOME"/build-tools/*/aapt2 | sort -V | tail -1)"
+NAME=workstation-connect
+TMP="$(mktemp -d /tmp/wsconnect-publish.XXXXXX)"
+trap 'rm -rf "$TMP"' EXIT
+KEEP=3
+
+die() { echo "publish: $*" >&2; exit 1; }
+run() { if [ -n "${DRY_RUN:-}" ]; then echo "dry-run: $*" >&2; else "$@"; fi; }
+[ $# -le 1 ] || die "usage: wsconnect/publish [apk]"
+[ -f "$APK" ] || die "no APK at $APK (./gradlew assembleDebug)"
+
+badging="$("$AAPT2" dump badging "$APK" | awk 'NR == 1')"  # not head: SIGPIPE + pipefail
+[ "$(sed -n "s/.*package: name='\([^']*\)'.*/\1/p" <<<"$badging")" = com.rutger.wsconnect ] || die "not a com.rutger.wsconnect APK: $badging"
+code="$(sed -n "s/.*versionCode='\([0-9]*\)'.*/\1/p" <<<"$badging")"
+name="$(sed -n "s/.*versionName='\([^']*\)'.*/\1/p" <<<"$badging")"
+[ -n "$code" ] && [ -n "$name" ] || die "could not read version from: $badging"
+case "$name" in *-dirty*) die "$name is a dirty build: commit first";; esac
+case "$name" in *-local*) die "$name has a WSCONNECT_UPDATE_URL override: rebuild without it";; esac
+
+status="$(curl -sS -o "$TMP/live.json" -w '%{http_code}' -H 'Cache-Control: no-cache' "$URL/version.json")" || die "can't reach $URL"
+published=""
+case "$status" in
+  404) ;; # first publish
+  200) published="$(sed -n 's/.*"versionCode": *\([0-9]*\).*/\1/p' "$TMP/live.json")"
+       [ -n "$published" ] || die "live version.json unreadable: $(head -c 200 "$TMP/live.json")";;
+  *) die "GET $URL/version.json: HTTP $status";;
+esac
+if [ -n "$published" ] && [ "$code" -le "$published" ]; then
+  die "versionCode $code is not newer than published $published"
+fi
+
+sha="$(sha256sum "$APK" | cut -d' ' -f1)"
+size="$(stat -c %s "$APK")"
+versioned="$NAME-$code.apk"
+echo "publishing $name ($code) over ${published:-nothing}"
+
+verify() { # remote-name expected-sha256
+  [ -n "${DRY_RUN:-}" ] && { echo "dry-run: verify $URL/$1"; return; }
+  local got
+  got="$(curl -fsS -H 'Cache-Control: no-cache' "$URL/$1" | sha256sum | cut -d' ' -f1)"
+  [ "$got" = "$2" ] || die "verify $URL/$1 failed: sha256 $got, expected $2"
+}
+
+run mcli cp --quiet "$APK" "$DEST/$versioned" >/dev/null
+verify "$versioned" "$sha"
+run mcli cp --quiet --disable-multipart "$DEST/$versioned" "$DEST/$NAME.apk" >/dev/null
+verify "$NAME.apk" "$sha"
+printf '{"versionCode": %s, "versionName": "%s", "apk": "%s", "sha256": "%s", "size": %s}\n' \
+  "$code" "$name" "$versioned" "$sha" "$size" >"$TMP/version.json"
+run mcli cp --quiet "$TMP/version.json" "$DEST/version.json" >/dev/null
+verify version.json "$(sha256sum "$TMP/version.json" | cut -d' ' -f1)"
+
+# Prune old versioned APKs (newest $KEEP stay, so a phone mid-download still finds its file).
+if [ -z "${DRY_RUN:-}" ]; then
+  mcli ls "$DEST/" | grep -o "$NAME-[0-9]*\.apk" | sort -t- -k3 -n | head -n -"$KEEP" |
+    while read -r old; do mcli rm --quiet "$DEST/$old" >/dev/null && echo "pruned $old"; done
+else
+  echo "dry-run: prune $DEST/$NAME-*.apk to newest $KEEP"
+fi
+
+echo "${DRY_RUN:+dry-run: }published $name ($code) sha256=$sha"
+echo "$URL/$NAME.apk"

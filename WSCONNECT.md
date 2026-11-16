@@ -41,3 +41,31 @@ export ANDROID_HOME=~/.local/share/android-sdk JAVA_HOME=/usr/lib/jvm/java-17-op
 echo "sdk.dir=$ANDROID_HOME" > local.properties
 ./gradlew assembleDebug    # build/outputs/apk/debug/kdeconnect-android-debug.apk
 ```
+
+## Updates
+
+- `wsconnect/java/.../update/Updater.kt`: checks `version.json` at app start, on Home resume (max every 30 min)
+  and every 6 h (WorkManager, any network incl. mobile data); downloads, verifies sha256, installs via a
+  PackageInstaller session. Base URL: `BuildConfig.UPDATE_URL` = `https://cdn.rutgerpronk.com/artifacts/workstation-connect/`,
+  `WSCONNECT_UPDATE_URL=<url>` at build time overrides it (adds `-local` to versionName). Uncommitted changes add `-dirty`.
+- Silent = self-update (`UPDATE_PACKAGES_WITHOUT_USER_ACTION` + `USER_ACTION_NOT_REQUIRED`), also right after an
+  adb/browser install, as long as "install unknown apps" is granted. Otherwise: Home card + notification, tap.
+- **Tether guard**: an update kills the process (and the hotspot/BT tethering the laptop may use). Silent installs
+  wait while `Tether.wanted`/`btTethered`/`hotspotOn`, retried on every tether change. Then: Android 14+ with us as
+  installer of record → `waitForInstallConstraints` (app not top-visible, not in a call), committed on its callback
+  after re-checking the guard; else (Android 13, first update after a manual install) our own check, retried when
+  the app leaves the screen. "Nu installeren" while tethering asks for confirmation first.
+- No `setAppNotForegroundRequired` (counts foreground services: LinkService always runs) and no
+  `setAppNotInteractingRequired` (counts any wifi/mobile traffic of the app in the last 10 min).
+- After an update `BootReceiver` (MY_PACKAGE_REPLACED) restarts LinkService: the start from `Application.onCreate`
+  is refused there (background FGS start), the broadcast is exempt. Shizuku helper rebinds via `Tether.init`.
+- Publish (Rutger): `wsconnect/publish [apk]` uploads `workstation-connect-<versionCode>.apk`, server-side copies it
+  to `workstation-connect.apk` (no second upload), then `version.json`; verifies each, keeps 3 versioned APKs.
+  Refuses `-dirty`/`-local` and non-newer versionCodes. `DRY_RUN=1`: checks only, prints the mcli commands.
+
+Emulator test (AVD `WsConnect_API35`, port 5590): build A and B (B = one commit later, e.g. a temporary empty
+commit, dropped afterwards) with `WSCONNECT_UPDATE_URL=http://10.0.2.2:8765/`; serve B as
+`workstation-connect-<code>.apk` + `version.json` with `python3 -m http.server 8765 --bind 127.0.0.1`; install A,
+`appops set com.rutger.wsconnect REQUEST_INSTALL_PACKAGES allow`, enable the link, leave the app → B installs,
+`dumpsys activity services com.rutger.wsconnect` shows LinkService. Fake tethering (as `adb root`):
+`am broadcast -a android.net.conn.TETHER_STATE_CHANGED --esal tetherArray bt-pan` (`rndis0` = idle again).

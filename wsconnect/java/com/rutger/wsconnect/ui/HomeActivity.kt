@@ -49,6 +49,8 @@ import com.rutger.wsconnect.Clipboard
 import com.rutger.wsconnect.LinkService
 import com.rutger.wsconnect.Tether
 import com.rutger.wsconnect.WsConnect
+import com.rutger.wsconnect.update.Updater
+import androidx.appcompat.app.AlertDialog
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -87,8 +89,11 @@ class HomeActivity : AppCompatActivity() {
         val laptop: Laptop?, val candidates: List<Candidate>, val setup: List<String>,
         val linkEnabled: Boolean, val shizukuReady: Boolean, val error: Boolean, val hotspot: Boolean,
         val bt: Boolean, val wanted: Boolean, val bleLaptop: Boolean, val notifyAccess: Boolean,
-        val autoClip: Boolean, val kdeBluetooth: Boolean,
+        val autoClip: Boolean, val kdeBluetooth: Boolean, val update: Update?,
     )
+
+    @Immutable
+    data class Update(val versionCode: Int, val line: String, val canInstall: Boolean)
 
     private val ui = mutableStateOf<Ui?>(null) // set in onCreate: snapshot() needs a context
     private var poll: Job? = null
@@ -115,6 +120,7 @@ class HomeActivity : AppCompatActivity() {
         Clipboard.defaultSkipSensitive(this)
         Tether.listen(bump)
         KdeConnect.getInstance().addDeviceListChangedCallback(TAG) { bump() }
+        Updater.onResume()
         poll = lifecycleScope.launch { while (true) { bump(); delay(1000) } }
     }
 
@@ -158,7 +164,23 @@ class HomeActivity : AppCompatActivity() {
             notifyAccess = NotificationManagerCompat.getEnabledListenerPackages(this).contains(packageName),
             autoClip = Clipboard.autoSync(this),
             kdeBluetooth = PreferenceManager.getDefaultSharedPreferences(this).getBoolean(SettingsFragment.KEY_BLUETOOTH_ENABLED, false),
+            update = update(),
         )
+    }
+
+    private fun update(): Update? {
+        val r = Updater.available ?: return null
+        val s = Updater.status
+        val line = when (s) {
+            is Updater.Status.Downloading -> "Downloaden… ${s.bytes / 1_048_576}/${r.size / 1_048_576} MB"
+            is Updater.Status.Waiting ->
+                if (s.tether) "Wacht tot hotspot/tethering uit staat" else "Installeert vanzelf zodra de app dicht is"
+            is Updater.Status.NeedsTap -> "Gedownload, installeren vraagt een tik"
+            is Updater.Status.Installing -> "Installeren…"
+            is Updater.Status.Failed -> s.message
+            else -> ""
+        }
+        return Update(r.versionCode, line, s !is Updater.Status.Downloading && s !is Updater.Status.Installing)
     }
 
     private fun device(id: String) = KdeConnect.getInstance().getDevice(id)
@@ -177,6 +199,7 @@ class HomeActivity : AppCompatActivity() {
                 Text(BuildConfig.VERSION_NAME, style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(bottom = 4.dp))
             }
+            s.update?.let { UpdateCard(it) }
             if (s.setup.isNotEmpty()) Setup(s.setup)
             if (s.laptop == null) Pairing(s.candidates) else LaptopCard(s.laptop)
             InternetCard(s)
@@ -204,6 +227,12 @@ class HomeActivity : AppCompatActivity() {
         text, style = MaterialTheme.typography.bodyMedium,
         color = if (warn) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
     )
+
+    @Composable
+    private fun UpdateCard(u: Update) = Section("Update beschikbaar (v${u.versionCode})") {
+        if (u.line.isNotEmpty()) Line(u.line)
+        Button(::confirmInstall, enabled = u.canInstall) { Text("Nu installeren") }
+    }
 
     @Composable
     private fun Setup(steps: List<String>) = Section("Nog instellen") {
@@ -330,6 +359,18 @@ class HomeActivity : AppCompatActivity() {
                     ?.permissionExplanationDialog?.show(supportFragmentManager, null)
             }
         }
+    }
+
+    /** The update restarts the app, which drops tethering the laptop may be using: confirm first. */
+    private fun confirmInstall() {
+        if (!Updater.tetherBusy) return Updater.installNow()
+        AlertDialog.Builder(this)
+            .setTitle("Hotspot valt even weg")
+            .setMessage("Tijdens de update herstart de app en gaan hotspot en Bluetooth-tethering uit. " +
+                "Je laptop verliest dan even internet. Toch nu installeren?")
+            .setPositiveButton("Installeren") { _, _ -> Updater.installNow() }
+            .setNegativeButton("Later", null)
+            .show()
     }
 
     private fun setKdeBluetooth(on: Boolean) {

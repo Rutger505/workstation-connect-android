@@ -5,6 +5,7 @@ import android.app.Application
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import com.rutger.wsconnect.update.Updater
 import org.kde.kdeconnect.Device
 import org.kde.kdeconnect.KdeConnect
 
@@ -22,6 +23,7 @@ object WsConnect {
         Tether.init(app)
         Clipboard.init(app)
         if (linkEnabled(app)) LinkService.start(app)
+        Updater.init(app)
     }
 
     private fun prefs(c: Context) = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -40,9 +42,17 @@ object WsConnect {
     fun setLaptop(c: Context, deviceId: String) = prefs(c).edit().putString("laptop", deviceId).apply()
 }
 
-/** Restarts the BLE link after a reboot. Shizuku won't run until wireless debugging is started again. */
+/**
+ * Restarts the BLE link after a reboot or an update (the process got killed; nobody opens the app).
+ * Both broadcasts exempt us from the background FGS-start ban; Application.onCreate already tried
+ * (LinkService.start is a no-op when running). Shizuku won't run after a reboot until wireless
+ * debugging is started again; after an update it rebinds via Tether.init (new UserService version).
+ */
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action == Intent.ACTION_BOOT_COMPLETED && WsConnect.linkEnabled(context)) LinkService.start(context)
+        val action = intent.action
+        if (action != Intent.ACTION_BOOT_COMPLETED && action != Intent.ACTION_MY_PACKAGE_REPLACED) return
+        AppLog.i("${action.substringAfterLast('.')}: link ${if (WsConnect.linkEnabled(context)) "starting" else "off"}")
+        if (WsConnect.linkEnabled(context)) LinkService.start(context)
     }
 }

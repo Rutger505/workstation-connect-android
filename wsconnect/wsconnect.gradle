@@ -13,12 +13,21 @@ def commitCount = providers.exec {
     ignoreExitValue = true
 }.standardOutput.asText.map { (it.trim() ?: '1') as int }
 
+// -dirty: uncommitted changes. -local: update URL overridden (emulator tests). wsconnect/publish refuses both.
+def dirty = providers.exec {
+    commandLine 'git', 'status', '--porcelain'
+    ignoreExitValue = true
+}.standardOutput.asText.map { !it.trim().isEmpty() }
+def defaultUpdateUrl = 'https://cdn.rutgerpronk.com/artifacts/workstation-connect/'
+def updateUrl = providers.environmentVariable('WSCONNECT_UPDATE_URL').orElse('')
+
 android {
     defaultConfig {
         applicationId = 'com.rutger.wsconnect'
         minSdk = 33 // TetheringManager (Shizuku tethering) + Application.getProcessName
         versionCode = commitCount.get()
-        versionName = "${versionName}+ws${commitCount.get()}"
+        versionName = "${versionName}+ws${commitCount.get()}" + (dirty.get() ? '-dirty' : '') + (updateUrl.get() ? '-local' : '')
+        buildConfigField 'String', 'UPDATE_URL', "\"${updateUrl.get() ?: defaultUpdateUrl}\""
     }
     buildFeatures {
         aidl = true
@@ -44,6 +53,8 @@ dependencies {
     implementation 'dev.rikka.shizuku:api:13.1.5'
     implementation 'dev.rikka.shizuku:provider:13.1.5'
     implementation 'org.lsposed.hiddenapibypass:hiddenapibypass:6.2'
+    // Updater's periodic check. Upstream doesn't use WorkManager; it self-initializes via androidx.startup.
+    implementation 'androidx.work:work-runtime:2.12.0'
 }
 
 // Rebrand to "Workstation Connect" without touching upstream res/manifest:
