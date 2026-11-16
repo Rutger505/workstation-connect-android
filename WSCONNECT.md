@@ -14,6 +14,8 @@ notifications, clipboard, files). Laptop side: [Rutger505/workstation-connect](h
   - `src/main/java/org/kde/kdeconnect/KdeConnect.kt`: helper-process guard + `WsConnect.init`
   - `src/main/java/org/kde/kdeconnect/plugins/clipboard/ClipboardListener.kt`: `setText` → `Clipboard.fromLaptop` (history)
   - `src/main/java/org/kde/kdeconnect/ui/MainActivity.kt`: `onCreate` → `HomeRedirect.toHome` (notifications/shortcuts land in our UI)
+- No hook, but upstream internals read by reflection: `Device.links` (private) in `wsconnect/.../Links.kt` (link type on Home,
+  dropping the laptop's LAN link on BLE `CMD_NET_CHANGED`). Check the field still exists after an upstream merge
 - Upstream files deleted: laptop→phone mouse/keyboard receivers (`plugins/{mousereceiver,remotekeyboard,remotekeyboardime,inputdevicesreceiver}`,
   `KdeConnectAccessibilityService.kt`, the IME test); `wsconnect.gradle` strips their manifest services. Unwanted (scrcpy types on the phone);
   deleted, not excluded, because KSP's plugin index ignores source-set excludes

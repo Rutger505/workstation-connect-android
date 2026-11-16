@@ -47,6 +47,7 @@ import android.widget.Toast
 import androidx.preference.PreferenceManager
 import com.rutger.wsconnect.Clipboard
 import com.rutger.wsconnect.LinkService
+import com.rutger.wsconnect.Links
 import com.rutger.wsconnect.Tether
 import com.rutger.wsconnect.WsConnect
 import com.rutger.wsconnect.update.Updater
@@ -77,7 +78,7 @@ class HomeActivity : AppCompatActivity() {
 
     @Immutable
     data class Laptop(
-        val id: String, val name: String, val reachable: Boolean, val battery: Int?, val charging: Boolean,
+        val id: String, val name: String, val reachable: Boolean, val via: Links.Via?, val battery: Int?, val charging: Boolean,
         val notifyOn: Boolean, val others: List<Pair<String, String>>,
     )
 
@@ -148,7 +149,7 @@ class HomeActivity : AppCompatActivity() {
         val laptop = d?.let {
             val battery = it.getPlugin(BatteryPlugin::class.java)?.remoteBatteryInfo
             Laptop(
-                id = it.deviceId, name = it.name, reachable = it.isReachable,
+                id = it.deviceId, name = it.name, reachable = it.isReachable, via = Links.via(it),
                 battery = battery?.currentCharge, charging = battery?.isCharging == true,
                 notifyOn = it.isPluginEnabled(NOTIFY_KEY),
                 others = all.filter { o -> o.isPaired && o.deviceId != it.deviceId }.map { o -> o.deviceId to o.name },
@@ -263,7 +264,11 @@ class HomeActivity : AppCompatActivity() {
     @Composable
     private fun LaptopCard(l: Laptop) = Section(l.name) {
         Line(buildString {
-            append(if (l.reachable) "Verbonden" else "Niet bereikbaar")
+            append(if (!l.reachable) "Niet bereikbaar" else when (l.via) {
+                Links.Via.WIFI -> "Verbonden via wifi"
+                Links.Via.BLUETOOTH -> "Verbonden via Bluetooth"
+                else -> "Verbonden"
+            })
             if (l.reachable && l.battery != null) append(" · batterij ${l.battery}%${if (l.charging) " ⚡" else ""}")
         }, warn = !l.reachable)
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

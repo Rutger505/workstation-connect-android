@@ -224,6 +224,7 @@ class LinkService : Service() {
                 Proto.CMD_ON -> { AppLog.i("laptop: on"); Tether.on() }
                 Proto.CMD_BT_OFF -> { AppLog.i("laptop: bt off"); Tether.btOff() }
                 Proto.CMD_OFF -> { AppLog.i("laptop: off"); Tether.off() }
+                Proto.CMD_NET_CHANGED -> { AppLog.i("laptop: net changed"); Links.dropLaptopLan(this@LinkService) }
                 else -> AppLog.i("laptop: unknown command ${value[0]}")
             }
         }
