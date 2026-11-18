@@ -67,7 +67,8 @@ class LinkService : Service() {
 
     // A bonded device that connects but doesn't subscribe may be the laptop failing to find our
     // service (dead server handle seen 2026-11-17/18: app said "service ja", laptop saw no
-    // 6f2b0001). Earbuds/watches also never subscribe, so rebuild at most every RESTART_MIN_MS.
+    // 6f2b0001). Earbuds/watches also never subscribe: once any address ever subscribed
+    // ([laptopAddresses]), only those arm the watchdog; rebuild at most every RESTART_MIN_MS.
     private val pendingSubscribe: MutableMap<BluetoothDevice, Runnable> = HashMap()
     private var lastRestart = 0L
     private var addFailures = 0
@@ -175,7 +176,7 @@ class LinkService : Service() {
 
     private fun startAdvertising() {
         val adv = bt.adapter?.bluetoothLeAdvertiser ?: return AppLog.i("no BLE advertiser")
-        adv.startAdvertising(
+        runCatching { adv.startAdvertising(
             AdvertiseSettings.Builder()
                 .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_POWER)
                 .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_MEDIUM)
@@ -184,7 +185,7 @@ class LinkService : Service() {
                 .build(),
             AdvertiseData.Builder().addServiceUuid(ParcelUuid(Proto.SERVICE)).build(),
             advertiseCallback,
-        )
+        ) }.onFailure { AppLog.i("advertising start error: $it") }
     }
 
     private val advertiseCallback = object : AdvertiseCallback() {
@@ -192,11 +193,15 @@ class LinkService : Service() {
             advertising = true
             AppLog.i("advertising")
         }
-        override fun onStartFailure(errorCode: Int) = AppLog.i("advertising failed: $errorCode")
+        override fun onStartFailure(errorCode: Int) = AppLog.i("advertising failed: ${advertiseError(errorCode)}")
     }
 
     private fun stopGatt() {
-        if (advertising) runCatching { bt.adapter?.bluetoothLeAdvertiser?.stopAdvertising(advertiseCallback) }
+        if (advertising) {
+            runCatching { bt.adapter?.bluetoothLeAdvertiser?.stopAdvertising(advertiseCallback) }
+                .onSuccess { AppLog.i("advertising stopped") }
+                .onFailure { AppLog.i("advertising stop error: $it") }
+        }
         advertising = false
         runCatching { server?.close() }
         server = null
@@ -209,7 +214,7 @@ class LinkService : Service() {
 
     private val gattCallback = object : BluetoothGattServerCallback() {
         override fun onServiceAdded(status: Int, service: BluetoothGattService) {
-            AppLog.i("gatt service added: status $status")
+            AppLog.i("gatt service added: ${gattStatus(status)}")
             main.post {
                 if (status == BluetoothGatt.GATT_SUCCESS) {
                     addFailures = 0
@@ -221,19 +226,24 @@ class LinkService : Service() {
         }
 
         override fun onConnectionStateChange(device: BluetoothDevice, status: Int, newState: Int) {
-            main.post { connectionChanged(device, newState) }
+            main.post { connectionChanged(device, status, newState) }
         }
 
-        private fun connectionChanged(device: BluetoothDevice, newState: Int) {
+        private fun connectionChanged(device: BluetoothDevice, status: Int, newState: Int) {
             if (newState == BluetoothProfile.STATE_CONNECTED) {
-                AppLog.i("ble connected: ${device.address} bond=${device.bondState}")
+                AppLog.i("ble connected: ${device.address} bond=${device.bondState}${if (status != 0) " ${gattStatus(status)}" else ""}")
                 if (device.bondState == BluetoothDevice.BOND_BONDED && device !in subscribed) {
+                    val known = laptopAddresses()
+                    if (known.isNotEmpty() && device.address !in known) {
+                        return AppLog.i("watchdog: ${device.address} skipped (not a known laptop)")
+                    }
                     val check = Runnable { subscribeMissing(device) }
                     pendingSubscribe.put(device, check)?.let(main::removeCallbacks)
                     main.postDelayed(check, SUBSCRIBE_GRACE_MS)
                 }
             } else {
-                AppLog.i("ble disconnected: ${device.address}")
+                val wasLaptop = device in subscribed
+                AppLog.i("ble disconnected: ${device.address} ${gattStatus(status)} state=$newState${if (wasLaptop) " (laptop)" else ""}")
                 pendingSubscribe.remove(device)?.let(main::removeCallbacks)
                 setSubscribed(device, false)
             }
@@ -283,9 +293,14 @@ class LinkService : Service() {
     /** Main thread only. Bonded LE link without a STATE subscription after the grace period. */
     private fun subscribeMissing(device: BluetoothDevice) {
         pendingSubscribe.remove(device)
-        if (device in subscribed || subscribed.isNotEmpty()) return
+        if (device in subscribed) return
+        val known = device.address in laptopAddresses()
+        AppLog.i("no subscribe from ${device.address} in ${SUBSCRIBE_GRACE_MS / 1000} s${if (known) " (known laptop)" else ""}")
+        if (subscribed.isNotEmpty()) return AppLog.i("gatt restart skipped: another laptop link is up")
         val since = android.os.SystemClock.elapsedRealtime() - lastRestart
-        if (lastRestart != 0L && since < RESTART_MIN_MS) return
+        if (lastRestart != 0L && since < RESTART_MIN_MS) {
+            return AppLog.i("gatt restart skipped: rate limit (last ${since / 1000} s ago)")
+        }
         restartGatt("${device.address} connected without subscribing")
     }
 
@@ -301,12 +316,25 @@ class LinkService : Service() {
             pendingSubscribe.remove(device)?.let(main::removeCallbacks)
             main.removeCallbacks(goneTimeout)
             AppLog.i("laptop connected: ${device.address}")
+            rememberLaptop(device.address)
             lastSent = null
             pushState()
         } else {
             AppLog.i("laptop disconnected: ${device.address}")
             if (subscribed.isEmpty() && Tether.wanted) main.postDelayed(goneTimeout, GONE_TIMEOUT_MS)
         }
+    }
+
+    private fun prefs() = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+
+    /** Addresses (as seen at subscribe time: public or RPA) that ever subscribed to STATE. */
+    private fun laptopAddresses(): Set<String> = prefs().getStringSet(KEY_LAPTOP_ADDRESSES, null) ?: emptySet()
+
+    private fun rememberLaptop(address: String) {
+        val known = laptopAddresses()
+        if (address in known) return
+        prefs().edit().putStringSet(KEY_LAPTOP_ADDRESSES, known + address).apply()
+        AppLog.i("laptop address remembered: $address (${known.size + 1} known)")
     }
 
     private fun stateBytes(): ByteArray {
@@ -387,6 +415,22 @@ class LinkService : Service() {
         const val SHIZUKU_NOTIFICATION_ID = 7702
         const val SHIZUKU_GRACE_MS = 15_000L
         const val SHIZUKU_PACKAGE = "moe.shizuku.privileged.api"
+        private const val PREFS = "wsconnect_link"
+        private const val KEY_LAPTOP_ADDRESSES = "laptop_addresses"
+
+        fun gattStatus(s: Int) = "status $s (0x%02x%s)".format(s, when (s) {
+            0x00 -> " ok"; 0x08 -> " timeout"; 0x13 -> " remote closed"; 0x16 -> " local closed"
+            0x22 -> " lmp timeout"; 0x3e -> " connect failed"; 0x85 -> " gatt error"; else -> ""
+        })
+
+        fun advertiseError(code: Int) = "$code " + when (code) {
+            AdvertiseCallback.ADVERTISE_FAILED_DATA_TOO_LARGE -> "data too large"
+            AdvertiseCallback.ADVERTISE_FAILED_TOO_MANY_ADVERTISERS -> "too many advertisers"
+            AdvertiseCallback.ADVERTISE_FAILED_ALREADY_STARTED -> "already started"
+            AdvertiseCallback.ADVERTISE_FAILED_INTERNAL_ERROR -> "internal error"
+            AdvertiseCallback.ADVERTISE_FAILED_FEATURE_UNSUPPORTED -> "unsupported"
+            else -> "unknown"
+        }
         @Volatile var running = false; private set
         /** A laptop is connected over BLE right now. */
         @Volatile var laptopConnected = false; private set
