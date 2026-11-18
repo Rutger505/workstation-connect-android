@@ -486,6 +486,15 @@ SPDX-License-Identifier: GPL-2.0-only OR GPL-3.0-only OR LicenseRef-KDE-Accepted
             android:screenOrientation="portrait"
             android:theme="@style/KdeConnectTheme.NoActionBar" />
         <activity android:name="com.rutger.wsconnect.ui.LogActivity" android:exported="false" />
+        <provider
+            android:name="com.rutger.wsconnect.ui.LogFileProvider"
+            android:authorities="${applicationId}.wsconnect.logs"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/wsconnect_log_paths" />
+        </provider>
         <activity android:name="com.rutger.wsconnect.ui.ClipboardActivity" android:exported="false" />
         <activity android:name="com.rutger.wsconnect.ui.NotificationFilterActivity" android:exported="false" />
         <service
