@@ -65,6 +65,13 @@ class LinkService : Service() {
 
     private val tetherListener: () -> Unit = { main.post { pushState(); checkShizuku() } }
 
+    // A bonded device that connects but doesn't subscribe may be the laptop failing to find our
+    // service (dead server handle seen 2026-11-17/18: app said "service ja", laptop saw no
+    // 6f2b0001). Earbuds/watches also never subscribe, so rebuild at most every RESTART_MIN_MS.
+    private val pendingSubscribe: MutableMap<BluetoothDevice, Runnable> = HashMap()
+    private var lastRestart = 0L
+    private var addFailures = 0
+
     private val shizukuWarning = Runnable(::showShizukuWarning)
     private var shizukuWarned = false
 
@@ -79,8 +86,13 @@ class LinkService : Service() {
                 }
                 BluetoothAdapter.ACTION_STATE_CHANGED ->
                     when (intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, -1)) {
-                        BluetoothAdapter.STATE_ON -> startGatt()
-                        BluetoothAdapter.STATE_TURNING_OFF -> stopGatt()
+                        // Always rebuild on ON: after a Bluetooth stack restart without
+                        // TURNING_OFF the old server handle is dead but non-null.
+                        BluetoothAdapter.STATE_ON -> restartGatt("bluetooth on")
+                        BluetoothAdapter.STATE_TURNING_OFF, BluetoothAdapter.STATE_OFF -> {
+                            if (server != null) AppLog.i("bluetooth off: gatt stopped")
+                            stopGatt()
+                        }
                     }
             }
         }
@@ -126,6 +138,14 @@ class LinkService : Service() {
         runCatching { getSystemService(TelephonyManager::class.java).unregisterTelephonyCallback(signalCallback) }
         stopGatt()
         super.onDestroy()
+    }
+
+    /** Main thread only. */
+    private fun restartGatt(why: String) {
+        lastRestart = android.os.SystemClock.elapsedRealtime()
+        AppLog.i("gatt restart: $why")
+        stopGatt()
+        startGatt()
     }
 
     private fun startGatt() {
@@ -181,6 +201,8 @@ class LinkService : Service() {
         runCatching { server?.close() }
         server = null
         stateChar = null
+        pendingSubscribe.values.forEach(main::removeCallbacks)
+        pendingSubscribe.clear()
         subscribed.clear()
         laptopConnected = false
     }
@@ -188,7 +210,14 @@ class LinkService : Service() {
     private val gattCallback = object : BluetoothGattServerCallback() {
         override fun onServiceAdded(status: Int, service: BluetoothGattService) {
             AppLog.i("gatt service added: status $status")
-            if (status == BluetoothGatt.GATT_SUCCESS) main.post(::startAdvertising)
+            main.post {
+                if (status == BluetoothGatt.GATT_SUCCESS) {
+                    addFailures = 0
+                    startAdvertising()
+                } else if (++addFailures <= 3) {
+                    main.postDelayed({ restartGatt("service add failed ($addFailures)") }, 5_000)
+                }
+            }
         }
 
         override fun onConnectionStateChange(device: BluetoothDevice, status: Int, newState: Int) {
@@ -198,8 +227,14 @@ class LinkService : Service() {
         private fun connectionChanged(device: BluetoothDevice, newState: Int) {
             if (newState == BluetoothProfile.STATE_CONNECTED) {
                 AppLog.i("ble connected: ${device.address} bond=${device.bondState}")
+                if (device.bondState == BluetoothDevice.BOND_BONDED && device !in subscribed) {
+                    val check = Runnable { subscribeMissing(device) }
+                    pendingSubscribe.put(device, check)?.let(main::removeCallbacks)
+                    main.postDelayed(check, SUBSCRIBE_GRACE_MS)
+                }
             } else {
                 AppLog.i("ble disconnected: ${device.address}")
+                pendingSubscribe.remove(device)?.let(main::removeCallbacks)
                 setSubscribed(device, false)
             }
         }
@@ -245,6 +280,15 @@ class LinkService : Service() {
         }
     }
 
+    /** Main thread only. Bonded LE link without a STATE subscription after the grace period. */
+    private fun subscribeMissing(device: BluetoothDevice) {
+        pendingSubscribe.remove(device)
+        if (device in subscribed || subscribed.isNotEmpty()) return
+        val since = android.os.SystemClock.elapsedRealtime() - lastRestart
+        if (lastRestart != 0L && since < RESTART_MIN_MS) return
+        restartGatt("${device.address} connected without subscribing")
+    }
+
     /** Main thread only. Tracks the laptop (bonded subscriber) and arms the gone timeout. */
     private fun setSubscribed(device: BluetoothDevice, on: Boolean) {
         if (on && device.bondState != BluetoothDevice.BOND_BONDED) {
@@ -254,6 +298,7 @@ class LinkService : Service() {
         if (!changed) return
         laptopConnected = subscribed.isNotEmpty()
         if (on) {
+            pendingSubscribe.remove(device)?.let(main::removeCallbacks)
             main.removeCallbacks(goneTimeout)
             AppLog.i("laptop connected: ${device.address}")
             lastSent = null
@@ -336,6 +381,8 @@ class LinkService : Service() {
 
     companion object {
         const val GONE_TIMEOUT_MS = 3 * 60_000L
+        const val SUBSCRIBE_GRACE_MS = 30_000L
+        const val RESTART_MIN_MS = 10 * 60_000L
         const val NOTIFICATION_ID = 7701 // KDE Connect's BackgroundService uses 1
         const val SHIZUKU_NOTIFICATION_ID = 7702
         const val SHIZUKU_GRACE_MS = 15_000L
