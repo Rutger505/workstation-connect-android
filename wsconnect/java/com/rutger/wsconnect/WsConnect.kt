@@ -20,6 +20,7 @@ object WsConnect {
     fun isHelperProcess(app: Application) = Application.getProcessName() != app.packageName
 
     fun init(app: Application) {
+        AppLog.init(app)
         Tether.init(app)
         Clipboard.init(app)
         if (linkEnabled(app)) LinkService.start(app)
