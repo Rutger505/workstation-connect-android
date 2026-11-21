@@ -100,6 +100,13 @@ object Tether {
         run("on") { c -> listOf(c.start(BT), c.start(WIFI)) }
     }
 
+    /** BT tethering only: the laptop has the hotspot turned off (its config `hotspot = false`). */
+    fun onBt() {
+        wanted = true
+        changed()
+        run("on bt") { c -> listOf(c.start(BT)) }
+    }
+
     fun btOff() = run("bt off") { c -> listOf(c.stop(BT)) }
 
     fun off() {

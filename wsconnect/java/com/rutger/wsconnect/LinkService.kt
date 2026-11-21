@@ -267,6 +267,7 @@ class LinkService : Service() {
             if (!ok) return AppLog.i("rejected write from ${device.address} (bond=${device.bondState})")
             when (value!![0]) {
                 Proto.CMD_ON -> { AppLog.i("laptop: on"); Tether.on() }
+                Proto.CMD_ON_BT -> { AppLog.i("laptop: on (bt only)"); Tether.onBt() }
                 Proto.CMD_BT_OFF -> { AppLog.i("laptop: bt off"); Tether.btOff() }
                 Proto.CMD_OFF -> { AppLog.i("laptop: off"); Tether.off() }
                 Proto.CMD_NET_CHANGED -> { AppLog.i("laptop: net changed"); Links.dropLaptopLan(this@LinkService) }
