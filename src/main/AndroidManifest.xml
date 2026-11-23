@@ -130,7 +130,7 @@ SPDX-License-Identifier: GPL-2.0-only OR GPL-3.0-only OR LicenseRef-KDE-Accepted
         <activity
             android:name="org.kde.kdeconnect.ui.MainActivity"
             android:exported="true">
-            <!-- workstation-connect: launcher is com.rutger.wsconnect.ui.HomeActivity -->
+            <!-- workstation-connect: launcher is com.rutger.workstationconnect.ui.HomeActivity -->
             <intent-filter>
                 <action android:name="android.service.quicksettings.action.QS_TILE_PREFERENCES"/>
             </intent-filter>
@@ -471,9 +471,9 @@ SPDX-License-Identifier: GPL-2.0-only OR GPL-3.0-only OR LicenseRef-KDE-Accepted
                 <action android:name="android.service.controls.ControlsProviderService" />
             </intent-filter>
         </service>
-        <!-- workstation-connect (code in wsconnect/) -->
+        <!-- workstation-connect (code in workstation-connect/) -->
         <activity
-            android:name="com.rutger.wsconnect.ui.HomeActivity"
+            android:name="com.rutger.workstationconnect.ui.HomeActivity"
             android:label="Workstation Connect"
             android:exported="true">
             <intent-filter>
@@ -481,32 +481,32 @@ SPDX-License-Identifier: GPL-2.0-only OR GPL-3.0-only OR LicenseRef-KDE-Accepted
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-        <activity android:name="com.rutger.wsconnect.ui.TrackpadActivity" android:exported="false"
+        <activity android:name="com.rutger.workstationconnect.ui.TrackpadActivity" android:exported="false"
             android:screenOrientation="portrait"
             android:theme="@style/KdeConnectTheme.NoActionBar" />
-        <activity android:name="com.rutger.wsconnect.ui.LogActivity" android:exported="false" />
+        <activity android:name="com.rutger.workstationconnect.ui.LogActivity" android:exported="false" />
         <provider
-            android:name="com.rutger.wsconnect.ui.LogFileProvider"
-            android:authorities="${applicationId}.wsconnect.logs"
+            android:name="com.rutger.workstationconnect.ui.LogFileProvider"
+            android:authorities="${applicationId}.logs"
             android:exported="false"
             android:grantUriPermissions="true">
             <meta-data
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/wsconnect_log_paths" />
         </provider>
-        <activity android:name="com.rutger.wsconnect.ui.ClipboardActivity" android:exported="false" />
-        <activity android:name="com.rutger.wsconnect.ui.NotificationFilterActivity" android:exported="false" />
+        <activity android:name="com.rutger.workstationconnect.ui.ClipboardActivity" android:exported="false" />
+        <activity android:name="com.rutger.workstationconnect.ui.NotificationFilterActivity" android:exported="false" />
         <service
-            android:name="com.rutger.wsconnect.LinkService"
+            android:name="com.rutger.workstationconnect.LinkService"
             android:exported="false"
             android:foregroundServiceType="connectedDevice" />
-        <receiver android:name="com.rutger.wsconnect.BootReceiver" android:exported="true">
+        <receiver android:name="com.rutger.workstationconnect.BootReceiver" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
         </receiver>
-        <receiver android:name="com.rutger.wsconnect.update.UpdateReceiver" android:exported="false" />
+        <receiver android:name="com.rutger.workstationconnect.update.UpdateReceiver" android:exported="false" />
         <provider
             android:name="rikka.shizuku.ShizukuProvider"
             android:authorities="${applicationId}.shizuku"

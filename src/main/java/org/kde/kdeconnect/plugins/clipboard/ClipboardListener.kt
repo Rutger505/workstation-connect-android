@@ -107,7 +107,7 @@ class ClipboardListener {
             currentContent = text
             currentContentType = ClipboardContentType.Text
             cm.setPrimaryClip(ClipData.newPlainText(null, text))
-            com.rutger.wsconnect.Clipboard.fromLaptop(text) // workstation-connect: clipboard history
+            com.rutger.workstationconnect.Clipboard.fromLaptop(text) // workstation-connect: clipboard history
         }
     }
 

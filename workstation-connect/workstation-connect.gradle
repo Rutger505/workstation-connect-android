@@ -1,0 +1,148 @@
+// workstation-connect additions to upstream KDE Connect, applied from the last line of build.gradle.kts.
+// Keep fork changes here (and in workstation-connect/) so upstream merges stay small.
+
+// Upstream's laptop→phone mouse/keyboard receivers are deleted from the fork (scrcpy covers typing).
+// Their manifest services are stripped from the merged manifest so nothing dangles.
+ext.wsDroppedServices = [
+    'org.kde.kdeconnect.KdeConnectAccessibilityService',
+    'org.kde.kdeconnect.plugins.remotekeyboardime.RemoteKeyboardService',
+]
+
+def commitCount = providers.exec {
+    commandLine 'git', 'rev-list', '--count', 'HEAD'
+    ignoreExitValue = true
+}.standardOutput.asText.map { (it.trim() ?: '1') as int }
+
+// -dirty: uncommitted changes. -local: update URL overridden (emulator tests). workstation-connect/publish refuses both.
+def dirty = providers.exec {
+    commandLine 'git', 'status', '--porcelain'
+    ignoreExitValue = true
+}.standardOutput.asText.map { !it.trim().isEmpty() }
+def defaultUpdateUrl = 'https://cdn.rutgerpronk.com/artifacts/workstation-connect/'
+def updateUrl = providers.environmentVariable('WSCONNECT_UPDATE_URL').orElse('')
+
+// Write-only S3 key for the log upload (LogUpload.kt). Never in git (public repo): read at build time from
+// ~/.config/wsconnect-logs/env (WSCONNECT_LOGS_ENV overrides the path), KEY=value lines. Missing → upload off.
+// Never print the values.
+def logsEnvFile = file(providers.environmentVariable('WSCONNECT_LOGS_ENV')
+    .orElse("${System.getProperty('user.home')}/.config/wsconnect-logs/env").get())
+def logsEnv = [:]
+if (logsEnvFile.isFile()) {
+    logsEnvFile.eachLine { raw ->
+        def line = raw.trim()
+        if (line.startsWith('export ')) line = line.substring(7).trim()
+        def i = line.indexOf('=')
+        if (line.startsWith('#') || i < 0) return
+        logsEnv[line.substring(0, i).trim()] = line.substring(i + 1).trim().replaceAll(/^["']|["']$/, '')
+    }
+}
+def logsKey = { String name -> (logsEnv[name] ?: '').replace('\\', '\\\\').replace('"', '\\"') }
+logger.lifecycle("wsconnect: log upload key ${logsKey('WSCONNECT_LOGS_ACCESS_KEY') && logsKey('WSCONNECT_LOGS_SECRET_KEY') ? 'found' : 'MISSING (upload off)'} (${logsEnvFile})")
+
+android {
+    defaultConfig {
+        applicationId = 'com.rutger.workstationconnect'
+        minSdk = 33 // TetheringManager (Shizuku tethering) + Application.getProcessName
+        versionCode = commitCount.get()
+        versionName = "${versionName}+ws${commitCount.get()}" + (dirty.get() ? '-dirty' : '') + (updateUrl.get() ? '-local' : '')
+        buildConfigField 'String', 'UPDATE_URL', "\"${updateUrl.get() ?: defaultUpdateUrl}\""
+        buildConfigField 'String', 'LOGS_ACCESS_KEY', "\"${logsKey('WSCONNECT_LOGS_ACCESS_KEY')}\""
+        buildConfigField 'String', 'LOGS_SECRET_KEY', "\"${logsKey('WSCONNECT_LOGS_SECRET_KEY')}\""
+    }
+    buildFeatures {
+        aidl = true
+    }
+    buildTypes {
+        debug {
+            // One app, one id: no ".debug" suffix (we ship the debug build).
+            applicationIdSuffix = null
+            versionNameSuffix = null
+        }
+    }
+    sourceSets {
+        main {
+            java.srcDir 'workstation-connect/java'
+            kotlin.srcDir 'workstation-connect/java' // AGP 9 built-in Kotlin doesn't pick up extra java dirs
+            aidl.srcDir 'workstation-connect/aidl'
+            res.srcDir 'workstation-connect/res'
+        }
+        test {
+            java.srcDir 'workstation-connect/test'
+            kotlin.srcDir 'workstation-connect/test'
+        }
+    }
+}
+
+dependencies {
+    implementation 'dev.rikka.shizuku:api:13.1.5'
+    implementation 'dev.rikka.shizuku:provider:13.1.5'
+    implementation 'org.lsposed.hiddenapibypass:hiddenapibypass:6.2'
+    // Updater's periodic check. Upstream doesn't use WorkManager; it self-initializes via androidx.startup.
+    implementation 'androidx.work:work-runtime:2.12.0'
+}
+
+// Rebrand to "Workstation Connect" without touching upstream res/manifest:
+// - every upstream string containing "KDE Connect" (all locales, plus src/debug's "Debug KDE Connect")
+//   is regenerated into a generated res dir, which the variant API merges above all source sets
+// - hardcoded "KDE Connect" labels in the merged manifest are rewritten
+abstract class WsRebrandRes extends DefaultTask {
+    @InputFiles abstract ConfigurableFileCollection getResDirs()
+    @OutputDirectory abstract DirectoryProperty getOutputDir()
+    @TaskAction void run() {
+        def out = outputDir.get().asFile
+        out.deleteDir()
+        def merged = [:] // values dir name -> [string name -> xml], later dirs win
+        resDirs.files.each { res ->
+            res.eachDirMatch(~/values.*/) { dir ->
+                def f = new File(dir, 'strings.xml')
+                if (!f.exists()) return
+                // whole-file regex: some locale files are a single line
+                (f.getText('UTF-8') =~ /(?s)<string\s[^>]*?name="([^"]+)"[^>]*>(?:(?!<\/string>).)*?KDE Connect(?:(?!<\/string>).)*?<\/string>/).each { m ->
+                    merged.get(dir.name, [:])[m[1]] = m[0]
+                }
+                // app name is translated in some locales (KDEConnect, KDE-anslut, ...): always ours
+                if (f.getText('UTF-8') =~ /name="kde_connect"/)
+                    merged.get(dir.name, [:])['kde_connect'] = '<string name="kde_connect">Workstation Connect</string>'
+            }
+        }
+        merged.each { dirName, strings ->
+            def target = new File(out, "${dirName}/strings.xml")
+            target.parentFile.mkdirs()
+            target.write('<?xml version="1.0" encoding="utf-8"?>\n<resources>\n' +
+                strings.values().collect { it.replace('Debug KDE Connect', 'Workstation Connect').replace('KDE Connect', 'Workstation Connect') }.join('\n') +
+                '\n</resources>\n', 'UTF-8')
+        }
+    }
+}
+abstract class WsRebrandManifest extends DefaultTask {
+    @InputFile abstract RegularFileProperty getMergedManifest()
+    @Input abstract ListProperty<String> getDroppedServices()
+    @OutputFile abstract RegularFileProperty getUpdatedManifest()
+    @TaskAction void run() {
+        def xml = mergedManifest.get().asFile.getText('UTF-8').replace('android:label="KDE Connect"', 'android:label="Workstation Connect"')
+        droppedServices.get().each { name ->
+            def re = ~/(?s)<service\s[^>]*?android:name="${java.util.regex.Pattern.quote(name)}".*?<\/service>/
+            if (!(xml =~ re).find()) throw new GradleException("workstation-connect: service $name not in merged manifest (upstream changed?)")
+            xml = xml.replaceAll(re, '')
+        }
+        updatedManifest.get().asFile.write(xml, 'UTF-8')
+    }
+}
+androidComponents {
+    onVariants(selector().all()) { variant ->
+        def cap = variant.name.capitalize()
+        def res = tasks.register("wsconnectRebrandRes${cap}", WsRebrandRes) {
+            resDirs.from(file('src/main/res'), file("src/${variant.buildType}/res"))
+        }
+        variant.sources.res.addGeneratedSourceDirectory(res, { it.outputDir })
+        // apply-from scripts can't see AGP classes: load SingleArtifact.MERGED_MANIFEST reflectively
+        def mergedManifest = variant.class.classLoader
+            .loadClass('com.android.build.api.artifact.SingleArtifact$MERGED_MANIFEST').getField('INSTANCE').get(null)
+        def man = tasks.register("wsconnectRebrandManifest${cap}", WsRebrandManifest) {
+            droppedServices.set(wsDroppedServices)
+        }
+        variant.artifacts.use(man)
+            .wiredWithFiles({ it.mergedManifest }, { it.updatedManifest })
+            .toTransform(mergedManifest)
+    }
+}

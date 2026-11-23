@@ -232,7 +232,7 @@ class BackgroundService : Service() {
                 }
             }
         }
-        return com.rutger.wsconnect.StatusNotification.decorate(this, notification) // workstation-connect
+        return com.rutger.workstationconnect.StatusNotification.decorate(this, notification) // workstation-connect
     }
 
     override fun onDestroy() {
