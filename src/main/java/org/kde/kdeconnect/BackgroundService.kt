@@ -156,7 +156,7 @@ class BackgroundService : Service() {
         }
     }
 
-    private fun createForegroundNotification(): Notification {
+    fun createForegroundNotification(): Notification { // workstation-connect: public + decorated, see StatusNotification
         // Why is this needed: https://developer.android.com/guide/components/services#Foreground
 
         val connectedDevices = mutableListOf<String>()
@@ -232,7 +232,7 @@ class BackgroundService : Service() {
                 }
             }
         }
-        return notification.build()
+        return com.rutger.wsconnect.StatusNotification.decorate(this, notification) // workstation-connect
     }
 
     override fun onDestroy() {

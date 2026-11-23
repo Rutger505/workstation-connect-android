@@ -75,7 +75,7 @@ object Updater {
     private const val CHECK_INTERVAL_HOURS = 6L
     private const val RESUME_CHECK_MS = 30 * 60_000L
     private const val CONSTRAINT_TIMEOUT_MS = 24 * 60 * 60_000L
-    private const val NOTIFICATION_ID = 7703 // LinkService uses 7701/7702
+    private const val NOTIFICATION_ID = 7703 // LinkService uses 7702, status notification 1
     private const val PREFS = "wsconnect-update"
 
     private val baseUrl = BuildConfig.UPDATE_URL.trimEnd('/')

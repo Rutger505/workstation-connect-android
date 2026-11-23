@@ -14,6 +14,8 @@ notifications, clipboard, files). Laptop side: [Rutger505/workstation-connect](h
   - `src/main/java/org/kde/kdeconnect/KdeConnect.kt`: helper-process guard + `WsConnect.init`
   - `src/main/java/org/kde/kdeconnect/plugins/clipboard/ClipboardListener.kt`: `setText` → `Clipboard.fromLaptop` (history)
   - `src/main/java/org/kde/kdeconnect/ui/MainActivity.kt`: `onCreate` → `HomeRedirect.toHome` (notifications/shortcuts land in our UI)
+  - `src/main/java/org/kde/kdeconnect/BackgroundService.kt`: `createForegroundNotification` public, returns via `StatusNotification.decorate`
+    (one ongoing notification, ID 1, shared with `LinkService`: title KDE Connect status, text laptop link, upstream's actions)
 - No hook, but upstream internals read by reflection: `Device.links` (private) in `wsconnect/.../Links.kt` (link type on Home,
   dropping the laptop's LAN link on `CMD_NET_CHANGED`). Check the field still exists after an upstream merge
 - Upstream files deleted: laptop→phone mouse/keyboard receivers (`plugins/{mousereceiver,remotekeyboard,remotekeyboardime,inputdevicesreceiver}`,
@@ -46,7 +48,7 @@ merged and latest upstream tags (exit 1 when behind). Update:
 ```sh
 git fetch upstream --tags
 git switch -c upstream-vX.Y.Z
-git merge vX.Y.Z            # conflicts only in the 4 files above; modify/delete on the dropped receivers: git rm them again
+git merge vX.Y.Z            # conflicts only in the 5 files above; modify/delete on the dropped receivers: git rm them again
 ./gradlew assembleDebug
 ```
 

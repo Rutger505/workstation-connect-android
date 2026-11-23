@@ -23,6 +23,8 @@ import android.telephony.SignalStrength
 import android.telephony.TelephonyCallback
 import android.telephony.TelephonyManager
 import com.rutger.wsconnect.ui.HomeActivity
+import org.kde.kdeconnect.BackgroundService
+import org.kde.kdeconnect.KdeConnect
 import org.kde.kdeconnect.helpers.NotificationHelper
 import java.io.DataInputStream
 import java.io.IOException
@@ -103,7 +105,11 @@ class LinkService : Service() {
     override fun onCreate() {
         super.onCreate()
         running = true
-        startForeground(NOTIFICATION_ID, notification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
+        startForeground(StatusNotification.ID, StatusNotification.build(this), ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
+        // BackgroundService refreshes on device changes itself; cover the time it isn't running
+        KdeConnect.getInstance().addDeviceListChangedCallback(DEVICES_CALLBACK) {
+            if (BackgroundService.instance == null) StatusNotification.refresh(this)
+        }
         deleteSharedPreferences(OLD_PREFS) // BLE era: laptop_addresses
         bt = getSystemService(BluetoothManager::class.java)
         registerReceiver(receiver, IntentFilter().apply {
@@ -132,6 +138,10 @@ class LinkService : Service() {
         stopServer()
         closeClients()
         clientLabels = emptyList()
+        KdeConnect.getInstance().removeDeviceListChangedCallback(DEVICES_CALLBACK)
+        // Shared notification stays while BackgroundService holds it: show the link as off. Without it the
+        // system already removed it; refresh() is then a no-op (running = false), so no orphan
+        StatusNotification.refresh(this)
         super.onDestroy()
     }
 
@@ -241,7 +251,7 @@ class LinkService : Service() {
     private fun clientsChanged() {
         if (!running) return // onDestroy cleared it; don't clobber a newer instance
         clientLabels = clients.map { it.label }
-        getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification())
+        StatusNotification.refresh(this)
     }
 
     /**
@@ -353,31 +363,16 @@ class LinkService : Service() {
         getSystemService(NotificationManager::class.java).cancel(SHIZUKU_NOTIFICATION_ID)
     }
 
-    private fun notification(): Notification {
-        // Upstream channels only: KdeConnect.onCreate deletes every unlisted channel, which throws
-        // (crash loop) while our foreground service still uses it.
-        val open = PendingIntent.getActivity(this, 0, Intent(this, HomeActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
-        val names = clientLabels.map { it.substringAfter('/') }
-        return Notification.Builder(this, NotificationHelper.Channels.PERSISTENT)
-            .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
-            .setContentTitle("Workstation Connect")
-            .setContentText(if (names.isEmpty()) "Wacht op laptop" else "Verbonden met ${names.joinToString()}")
-            .setContentIntent(open)
-            .setOngoing(true)
-            .setOnlyAlertOnce(true)
-            .build()
-    }
-
     companion object {
         const val GONE_TIMEOUT_MS = 3 * 60_000L
         const val BACKOFF_MIN_MS = 2_000L
         const val BACKOFF_MAX_MS = 60_000L
-        const val NOTIFICATION_ID = 7701 // KDE Connect's BackgroundService uses 1
         const val SHIZUKU_NOTIFICATION_ID = 7702
         const val SHIZUKU_GRACE_MS = 15_000L
         const val SHIZUKU_PACKAGE = "moe.shizuku.privileged.api"
         private const val SDP_NAME = "Workstation Connect"
         private const val OLD_PREFS = "wsconnect_link"
+        private const val DEVICES_CALLBACK = "wsconnect-status"
 
         @Volatile var running = false; private set
         /** RFCOMM server socket open and accepting. */
