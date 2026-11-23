@@ -94,7 +94,7 @@ class LogActivity : AppCompatActivity() {
     @Immutable
     data class Status(val groups: List<Pair<String, List<Item>>>)
 
-    enum class Filter(val label: String) { ALL("Alles"), BLE("BLE"), TETHER("Tethering"), ERRORS("Fouten") }
+    enum class Filter(val label: String) { ALL("Alles"), BT("Bluetooth"), TETHER("Tethering"), ERRORS("Fouten") }
 
     private val status = mutableStateOf<Status?>(null) // set in onCreate: snapshot() needs a context
     private val lines = mutableStateOf(AppLog.lines())
@@ -143,11 +143,14 @@ class LogActivity : AppCompatActivity() {
                 item("toestemming", Tether.shizukuAllowed, Level.WARN),
                 item("helper", Tether.ready, Level.WARN),
             ),
-            "BLE-link" to listOf(
-                item("service", service, if (autostart) Level.ERROR else Level.OFF),
-                item("laptop", LinkService.laptopConnected),
-                item("autostart", autostart),
-            ),
+            "Bluetooth-link" to buildList {
+                add(item("service", service, if (autostart) Level.ERROR else Level.OFF))
+                add(item("luistert", LinkService.listening, if (service) Level.WARN else Level.OFF))
+                val laptops = LinkService.clientLabels
+                if (laptops.isEmpty()) add(item("geen laptop", false))
+                else laptops.forEach { add(Item(it.substringAfter('/'), Level.OK)) }
+                add(item("autostart", autostart))
+            },
             "Tethering" to listOf(
                 item("gewenst", Tether.wanted),
                 item("hotspot", Tether.hotspotOn),
@@ -357,8 +360,8 @@ class LogActivity : AppCompatActivity() {
         private val OK_GREEN = Color(0xFF2E9D4A)
         private val WARN_AMBER = Color(0xFFC77700)
         private val ERROR_WORDS = listOf("fail", "error", "refused", "rejected", "exception", "denied", "mislukt")
-        private val WARN_WORDS = listOf("gatt restart", "no subscribe", "warning", "gone", "rate limit", "bluetooth off", "skipped")
-        private val BLE_WORDS = listOf("ble", "gatt", "laptop", "advertis", "watchdog", "subscribe", "bluetooth")
+        private val WARN_WORDS = listOf("restart in", "read ended", "warning", "gone", "bluetooth off", "ignored")
+        private val BT_WORDS = listOf("rfcomm", "laptop", "bluetooth")
         private val TETHER_WORDS = listOf("tether", "hotspot", "shizuku", "helper", "laptop: on", "laptop: off")
 
         /** "yyyy-MM-dd HH:mm:ss.SSS msg" → ("HH:mm:ss", msg); other lines (old format, separators) as-is. */
@@ -369,7 +372,6 @@ class LogActivity : AppCompatActivity() {
 
         fun severity(msg: String): Level {
             val m = msg.lowercase()
-            if (m.startsWith("watchdog:")) return Level.OFF
             return when {
                 ERROR_WORDS.any { it in m } -> Level.ERROR
                 WARN_WORDS.any { it in m } -> Level.WARN
@@ -383,7 +385,7 @@ class LogActivity : AppCompatActivity() {
             if (msg.startsWith("--- ")) return true
             val m = msg.lowercase()
             return when (f) {
-                Filter.BLE -> BLE_WORDS.any { it in m }
+                Filter.BT -> BT_WORDS.any { it in m }
                 Filter.TETHER -> TETHER_WORDS.any { it in m }
                 Filter.ERRORS -> severity(msg) != Level.OFF
                 Filter.ALL -> true

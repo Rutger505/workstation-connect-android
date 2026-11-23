@@ -1,7 +1,7 @@
 # workstation-connect (Android)
 
 Fork of [KDE Connect Android](https://invent.kde.org/network/kdeconnect-android) (GPL) with
-workstation-connect built in: own home screen, auto Wi-Fi hotspot (BLE control link + Shizuku; hotspot is the only tethering, no Bluetooth tethering), trackpad
+workstation-connect built in: own home screen, auto Wi-Fi hotspot (Bluetooth RFCOMM control link + Shizuku; hotspot is the only tethering, no Bluetooth tethering), trackpad
 with volume keys as mouse buttons. KDE Connect stays the engine (pairing, encryption,
 notifications, clipboard, files). Laptop side: [Rutger505/workstation-connect](https://github.com/Rutger505/workstation-connect).
 
@@ -15,7 +15,7 @@ notifications, clipboard, files). Laptop side: [Rutger505/workstation-connect](h
   - `src/main/java/org/kde/kdeconnect/plugins/clipboard/ClipboardListener.kt`: `setText` → `Clipboard.fromLaptop` (history)
   - `src/main/java/org/kde/kdeconnect/ui/MainActivity.kt`: `onCreate` → `HomeRedirect.toHome` (notifications/shortcuts land in our UI)
 - No hook, but upstream internals read by reflection: `Device.links` (private) in `wsconnect/.../Links.kt` (link type on Home,
-  dropping the laptop's LAN link on BLE `CMD_NET_CHANGED`). Check the field still exists after an upstream merge
+  dropping the laptop's LAN link on `CMD_NET_CHANGED`). Check the field still exists after an upstream merge
 - Upstream files deleted: laptop→phone mouse/keyboard receivers (`plugins/{mousereceiver,remotekeyboard,remotekeyboardime,inputdevicesreceiver}`,
   `KdeConnectAccessibilityService.kt`, the IME test); `wsconnect.gradle` strips their manifest services. Unwanted (scrcpy types on the phone);
   deleted, not excluded, because KSP's plugin index ignores source-set excludes
@@ -24,13 +24,19 @@ notifications, clipboard, files). Laptop side: [Rutger505/workstation-connect](h
 - App id `com.rutger.wsconnect`, versionCode = commit count, we ship the debug build
   (signed with upstream's `debug.keystore`, so updates install over each other).
 
-## BLE protocol (v4)
+## Link protocol (v5, classic Bluetooth RFCOMM)
 
-- `wsconnect/.../Proto.kt`, keep in sync with the laptop's `proto.rs`. GATT server in `LinkService` (bonded laptops only)
-- CONTROL: `CMD_OFF` (0) stops the hotspot, `CMD_ON` (1) starts it, `CMD_NET_CHANGED` (3) drops the laptop's LAN links.
-  2 and 4 (old BT tethering commands) are retired: logged + ignored, never reuse
-- STATE flags: 1 Shizuku, 2 unused (was BT tethered, always 0, never reuse), 4 hotspot, 8 wanted, 16 error
-- Laptop BLE gone 3 min while wanted → hotspot off
+- `wsconnect/.../Proto.kt`, keep in sync with the laptop's `proto.rs`. `LinkService` = RFCOMM server
+  (`listenUsingRfcommWithServiceRecord`, secure: bonded + encrypted only), UUID `6f2b0010-3c1d-4e8a-9f41-7a5d2c9e0b10`;
+  laptop finds the channel via SDP and pages the bonded phone directly (no advertising; v4 and older were BLE GATT)
+- Multiple clients (laptop + desktop): one reader thread + one writer per socket, an I/O error closes only that client.
+  Accept failure while Bluetooth is on → server reopened with backoff (2 s doubling to 60 s)
+- Frames both ways: `[len u8][payload]`, len 0 = keepalive (ignored)
+- Laptop → phone, 1 byte: `CMD_OFF` (0) stops the hotspot, `CMD_ON` (1) starts it, `CMD_NET_CHANGED` (3) drops the
+  laptop's LAN links, `CMD_PING` (5) → state frame. 2 and 4 (old BT tethering commands) retired: logged + ignored, never reuse
+- Phone → laptop, 4 bytes `[flags, battery %, signal 0-4/255, version 5]`: after accept, on every change, on ping
+- Flags: 1 Shizuku, 2 unused (was BT tethered, always 0, never reuse), 4 hotspot, 8 wanted, 16 error
+- Last client gone 3 min while wanted → hotspot off
 
 ## Upstream updates
 

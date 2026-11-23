@@ -29,7 +29,7 @@ object WsConnect {
 
     private fun prefs(c: Context) = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
-    /** BLE link (auto hotspot) on; survives reboots. */
+    /** Bluetooth link (auto hotspot) on; survives reboots. */
     fun linkEnabled(c: Context) = prefs(c).getBoolean("enabled", false)
     fun setLinkEnabled(c: Context, on: Boolean) = prefs(c).edit().putBoolean("enabled", on).apply()
 
@@ -44,7 +44,7 @@ object WsConnect {
 }
 
 /**
- * Restarts the BLE link after a reboot or an update (the process got killed; nobody opens the app).
+ * Restarts the Bluetooth link after a reboot or an update (the process got killed; nobody opens the app).
  * Both broadcasts exempt us from the background FGS-start ban; Application.onCreate already tried
  * (LinkService.start is a no-op when running). Shizuku won't run after a reboot until wireless
  * debugging is started again; after an update it rebinds via Tether.init (new UserService version).

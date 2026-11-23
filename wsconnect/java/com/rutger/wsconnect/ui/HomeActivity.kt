@@ -89,7 +89,7 @@ class HomeActivity : AppCompatActivity() {
     data class Ui(
         val laptop: Laptop?, val candidates: List<Candidate>, val setup: List<String>,
         val linkEnabled: Boolean, val shizukuReady: Boolean, val error: Boolean, val hotspot: Boolean,
-        val wanted: Boolean, val bleLaptop: Boolean, val notifyAccess: Boolean,
+        val wanted: Boolean, val btLaptops: List<String>, val notifyAccess: Boolean,
         val autoClip: Boolean, val kdeBluetooth: Boolean, val update: Update?,
     )
 
@@ -161,7 +161,7 @@ class HomeActivity : AppCompatActivity() {
             laptop = laptop, candidates = candidates, setup = setupSteps(d),
             linkEnabled = WsConnect.linkEnabled(this), shizukuReady = Tether.ready, error = Tether.lastError,
             hotspot = Tether.hotspotOn, wanted = Tether.wanted,
-            bleLaptop = LinkService.laptopConnected,
+            btLaptops = LinkService.clientLabels.map { it.substringAfter('/') },
             notifyAccess = NotificationManagerCompat.getEnabledListenerPackages(this).contains(packageName),
             autoClip = Clipboard.autoSync(this),
             kdeBluetooth = PreferenceManager.getDefaultSharedPreferences(this).getBoolean(SettingsFragment.KEY_BLUETOOTH_ENABLED, false),
@@ -303,7 +303,7 @@ class HomeActivity : AppCompatActivity() {
             s.wanted -> "Bezig met aanzetten…"
             else -> "Klaar, staat uit"
         }, warn = !s.shizukuReady || s.error)
-        Line(if (s.bleLaptop) "Laptop in de buurt (Bluetooth)" else "Laptop niet in de buurt (Bluetooth)")
+        Line(if (s.btLaptops.isEmpty()) "Geen laptop verbonden (Bluetooth)" else "Verbonden via Bluetooth: ${s.btLaptops.joinToString()}")
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(Tether::on, enabled = s.shizukuReady && !s.wanted) { Text("Nu aanzetten") }
             OutlinedButton(Tether::off, enabled = s.wanted || s.hotspot) { Text("Uitzetten") }
@@ -345,7 +345,7 @@ class HomeActivity : AppCompatActivity() {
         when {
             step == STEP_PERMISSIONS -> askPermissions.launch(missing().toTypedArray())
             step == STEP_BATTERY -> {
-                @Suppress("BatteryLife") // the BLE link and KDE Connect must survive Doze
+                @Suppress("BatteryLife") // the Bluetooth link and KDE Connect must survive Doze
                 startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName")))
             }
             step == STEP_SHIZUKU_START -> startActivity(
@@ -403,7 +403,6 @@ class HomeActivity : AppCompatActivity() {
         val BT_PERMISSIONS = arrayOf(Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_SCAN)
         val PERMISSIONS = listOf(
             Manifest.permission.BLUETOOTH_CONNECT,
-            Manifest.permission.BLUETOOTH_ADVERTISE,
             Manifest.permission.POST_NOTIFICATIONS,
         )
     }
