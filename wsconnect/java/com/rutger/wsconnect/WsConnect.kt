@@ -5,6 +5,7 @@ import android.app.Application
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import com.rutger.wsconnect.logs.LogUpload
 import com.rutger.wsconnect.update.Updater
 import org.kde.kdeconnect.Device
 import org.kde.kdeconnect.KdeConnect
@@ -21,10 +22,12 @@ object WsConnect {
 
     fun init(app: Application) {
         AppLog.init(app)
+        LogUpload.init(app) // crash handler early
         Tether.init(app)
         Clipboard.init(app)
         if (linkEnabled(app)) LinkService.start(app)
         Updater.init(app)
+        Diag.init(app)
         Tether.restoreAfterUpdate()
     }
 

@@ -43,6 +43,7 @@ import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import com.rutger.wsconnect.AppLog
 import org.kde.kdeconnect.plugins.notifications.AppDatabase
 import org.kde.kdeconnect.ui.compose.KdeTheme
 
@@ -81,7 +82,7 @@ class NotificationFilterActivity : AppCompatActivity() {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Nieuwe apps standaard aan", Modifier.weight(1f))
             var all by mutableBool(db.allEnabled)
-            Switch(all, { db.allEnabled = it; all = it })
+            Switch(all, { db.allEnabled = it; all = it; AppLog.i("notif filter: all apps ${if (it) "on" else "off"}") })
         }
         OutlinedTextField(query.value, { query.value = it }, Modifier.fillMaxWidth(), label = { Text("Zoeken") }, singleLine = true)
         val list = apps.value ?: return@Column Text("Apps laden…")
@@ -94,7 +95,7 @@ class NotificationFilterActivity : AppCompatActivity() {
                         Image(app.icon.asImageBitmap(), null, Modifier.size(36.dp))
                         Spacer(Modifier.width(12.dp))
                         Text(app.name, Modifier.weight(1f))
-                        Switch(enabled[app.pkg] ?: false, { db.setEnabled(app.pkg, it); enabled[app.pkg] = it })
+                        Switch(enabled[app.pkg] ?: false, { db.setEnabled(app.pkg, it); enabled[app.pkg] = it; AppLog.i("notif filter: ${app.pkg} ${if (it) "on" else "off"}") })
                     }
                     if (expanded.value == app.pkg) Privacy(app.pkg)
                 }
@@ -110,7 +111,7 @@ class NotificationFilterActivity : AppCompatActivity() {
         ).forEach { (opt, label) ->
             var on by mutableBool(db.getPrivacy(pkg, opt))
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Checkbox(on, { db.setPrivacy(pkg, opt, it); on = it })
+                Checkbox(on, { db.setPrivacy(pkg, opt, it); on = it; AppLog.i("notif filter: $pkg ${opt.name.lowercase()} ${if (it) "on" else "off"}") })
                 Text(label, style = MaterialTheme.typography.bodyMedium)
             }
         }

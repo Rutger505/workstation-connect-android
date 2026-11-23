@@ -21,6 +21,24 @@ def dirty = providers.exec {
 def defaultUpdateUrl = 'https://cdn.rutgerpronk.com/artifacts/workstation-connect/'
 def updateUrl = providers.environmentVariable('WSCONNECT_UPDATE_URL').orElse('')
 
+// Write-only S3 key for the log upload (LogUpload.kt). Never in git (public repo): read at build time from
+// ~/.config/wsconnect-logs/env (WSCONNECT_LOGS_ENV overrides the path), KEY=value lines. Missing → upload off.
+// Never print the values.
+def logsEnvFile = file(providers.environmentVariable('WSCONNECT_LOGS_ENV')
+    .orElse("${System.getProperty('user.home')}/.config/wsconnect-logs/env").get())
+def logsEnv = [:]
+if (logsEnvFile.isFile()) {
+    logsEnvFile.eachLine { raw ->
+        def line = raw.trim()
+        if (line.startsWith('export ')) line = line.substring(7).trim()
+        def i = line.indexOf('=')
+        if (line.startsWith('#') || i < 0) return
+        logsEnv[line.substring(0, i).trim()] = line.substring(i + 1).trim().replaceAll(/^["']|["']$/, '')
+    }
+}
+def logsKey = { String name -> (logsEnv[name] ?: '').replace('\\', '\\\\').replace('"', '\\"') }
+logger.lifecycle("wsconnect: log upload key ${logsKey('WSCONNECT_LOGS_ACCESS_KEY') && logsKey('WSCONNECT_LOGS_SECRET_KEY') ? 'found' : 'MISSING (upload off)'} (${logsEnvFile})")
+
 android {
     defaultConfig {
         applicationId = 'com.rutger.wsconnect'
@@ -28,6 +46,8 @@ android {
         versionCode = commitCount.get()
         versionName = "${versionName}+ws${commitCount.get()}" + (dirty.get() ? '-dirty' : '') + (updateUrl.get() ? '-local' : '')
         buildConfigField 'String', 'UPDATE_URL', "\"${updateUrl.get() ?: defaultUpdateUrl}\""
+        buildConfigField 'String', 'LOGS_ACCESS_KEY', "\"${logsKey('WSCONNECT_LOGS_ACCESS_KEY')}\""
+        buildConfigField 'String', 'LOGS_SECRET_KEY', "\"${logsKey('WSCONNECT_LOGS_SECRET_KEY')}\""
     }
     buildFeatures {
         aidl = true
@@ -45,6 +65,10 @@ android {
             kotlin.srcDir 'wsconnect/java' // AGP 9 built-in Kotlin doesn't pick up extra java dirs
             aidl.srcDir 'wsconnect/aidl'
             res.srcDir 'wsconnect/res'
+        }
+        test {
+            java.srcDir 'wsconnect/test'
+            kotlin.srcDir 'wsconnect/test'
         }
     }
 }

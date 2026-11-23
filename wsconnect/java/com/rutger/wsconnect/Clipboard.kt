@@ -36,17 +36,37 @@ object Clipboard {
     fun init(context: Context) {
         app = context.applicationContext
         load()
+        AppLog.i("clipboard: auto sync ${if (autoSync(app)) "on" else "off"} (READ_LOGS " +
+            "${if (app.checkSelfPermission(Manifest.permission.READ_LOGS) == PackageManager.PERMISSION_GRANTED) "granted" else "not granted"})")
         ClipboardListener.instance(app).registerObserver(object : ClipboardListener.ClipboardObserver {
             override fun clipboardChanged(content: String, contentType: ClipboardListener.ClipboardContentType) {
+                logPhoneCopy(content, contentType)
                 if (contentType == ClipboardListener.ClipboardContentType.Text) add(content, fromLaptop = false)
             }
         })
     }
 
+    /** What upstream's ClipboardPlugin observer does with a phone copy, mirrored. Lengths only, never content. */
+    private fun logPhoneCopy(content: String, type: ClipboardListener.ClipboardContentType) = runCatching {
+        val laptop = WsConnect.laptop(app)
+        val plugin = laptop?.getPlugin(ClipboardPlugin::class.java)
+        val skip = plugin?.preferences?.getBoolean(app.getString(R.string.clipboard_preference_key_skip_sensitive), false) == true
+        val what = when {
+            laptop == null -> "no paired laptop"
+            plugin == null -> "not sent: clipboard plugin ${Diag.plugin(laptop, ClipboardPlugin::class.java)}"
+            type == ClipboardListener.ClipboardContentType.Password && skip -> "skipped-sensitive"
+            !laptop.isReachable -> "not sent: laptop unreachable"
+            else -> "sent"
+        }
+        AppLog.i("clipboard: phone copy (${type.name.lowercase()}, ${content.length} chars): $what")
+    }
+
     /** Hook from upstream ClipboardListener.setText (text that came from the laptop). */
     @JvmStatic
     fun fromLaptop(text: String?) {
-        if (::app.isInitialized && !text.isNullOrEmpty()) add(text, fromLaptop = true)
+        if (!::app.isInitialized) return
+        AppLog.i("clipboard: received from laptop (${text?.length ?: 0} chars)")
+        if (!text.isNullOrEmpty()) add(text, fromLaptop = true)
     }
 
     fun history(): List<Item> = synchronized(items) { items.toList() }
@@ -95,11 +115,14 @@ object Clipboard {
      */
     fun enableAutoSync(c: Context, done: (String) -> Unit) {
         val pkg = c.packageName
+        AppLog.i("clipboard: enabling auto sync (READ_LOGS via shizuku)")
         Tether.shell("pm grant $pkg ${Manifest.permission.READ_LOGS} && appops set $pkg SYSTEM_ALERT_WINDOW allow") { r ->
-            if (!r.startsWith("exit 0")) return@shell done(r)
+            if (!r.startsWith("exit 0")) return@shell done(r).also { AppLog.i("clipboard: READ_LOGS grant failed") }
             if (c.checkSelfPermission(Manifest.permission.READ_LOGS) != PackageManager.PERMISSION_GRANTED) {
+                AppLog.i("clipboard: READ_LOGS granted but not active")
                 return@shell done("granted but not active: $r")
             }
+            AppLog.i("clipboard: READ_LOGS granted, restarting the app")
             restart(c)
         }
     }

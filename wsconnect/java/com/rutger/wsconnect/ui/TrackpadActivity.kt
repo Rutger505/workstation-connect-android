@@ -15,6 +15,8 @@ import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
+import com.rutger.wsconnect.AppLog
+import com.rutger.wsconnect.Diag
 import org.kde.kdeconnect.KdeConnect
 import org.kde.kdeconnect.plugins.mousepad.MousePadPlugin
 import kotlin.math.abs
@@ -31,8 +33,18 @@ import kotlin.math.hypot
 class TrackpadActivity : Activity() {
 
     private lateinit var deviceId: String
+    /** Every send goes through here: counts, and logs when the plugin appears/disappears (sends dropped). */
     private val plugin: MousePadPlugin?
-        get() = KdeConnect.getInstance().getDevicePlugin(deviceId, MousePadPlugin::class.java)
+        get() = KdeConnect.getInstance().getDevicePlugin(deviceId, MousePadPlugin::class.java).also { p ->
+            if (p != null) sent++ else dropped++
+            if ((p != null) != pluginSeen) {
+                pluginSeen = p != null
+                AppLog.i("trackpad: " + if (p != null) "mousepad plugin available, sending" else "input dropped: ${pluginState()}")
+            }
+        }
+    private var pluginSeen: Boolean? = null
+    private var sent = 0
+    private var dropped = 0
     private var leftHeld = false
     private val prefs by lazy { getSharedPreferences(PREFS, Context.MODE_PRIVATE) }
 
@@ -45,6 +57,18 @@ class TrackpadActivity : Activity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         upEdge = prefs.getInt(KEY_UP_EDGE, 0)
         setContentView(Pad(this))
+        pluginSeen = KdeConnect.getInstance().getDevicePlugin(deviceId, MousePadPlugin::class.java) != null
+        AppLog.i("trackpad: open (${pluginState()})")
+    }
+
+    override fun onDestroy() {
+        if (::deviceId.isInitialized) AppLog.i("trackpad: close ($sent sent, $dropped dropped)")
+        super.onDestroy()
+    }
+
+    private fun pluginState(): String {
+        val d = KdeConnect.getInstance().getDevice(deviceId) ?: return "device $deviceId unknown"
+        return "${d.name}: reachable=${d.isReachable} mousepad=${Diag.plugin(d, MousePadPlugin::class.java)}"
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {

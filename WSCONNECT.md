@@ -70,9 +70,10 @@ echo "sdk.dir=$ANDROID_HOME" > local.properties
   `WSCONNECT_UPDATE_URL=<url>` at build time overrides it (adds `-local` to versionName). Uncommitted changes add `-dirty`.
 - Silent = self-update (`UPDATE_PACKAGES_WITHOUT_USER_ACTION` + `USER_ACTION_NOT_REQUIRED`), also right after an
   adb/browser install, as long as "install unknown apps" is granted. Otherwise: Home card + notification, tap.
-  A failed silent install of a version is retried after 1 h. Checks every 10 min log only new errors.
+  A failed silent install of a version is retried after 1 h. Checks every 10 min log only new errors (every AppLog
+  line makes the periodic log upload run).
 - **Hotspot across the update** (the install kills the process): before the commit `Tether.saveForUpdate` stores
-  "wanted" with a timestamp (prefs `wsconnect-tether`). The new process
+  "wanted" with a timestamp (prefs `wsconnect-tether`), then the log is uploaded (reason `update`). The new process
   (`WsConnect.init`, also `BootReceiver` on MY_PACKAGE_REPLACED, idempotent) calls `Tether.restoreAfterUpdate`:
   wanted again right away (laptop sees FLAG_WANTED), hotspot on once the Shizuku helper binds; ignored when older
   than 5 min, gives up after 5 min without helper. No laptop reconnecting within 3 min → off (`armGoneTimeout`).
@@ -90,3 +91,24 @@ commit, dropped afterwards) with `WSCONNECT_UPDATE_URL=http://10.0.2.2:8765/`; s
 `dumpsys activity services com.rutger.wsconnect` shows LinkService. Fake tethering (as `adb root`):
 `am broadcast -a android.net.conn.TETHER_STATE_CHANGED --esal tetherArray wlan1` (`rndis0` = idle again).
 
+## Log upload
+
+- `wsconnect/java/.../logs/`: `LogUpload` (Android), `LogUploadLogic` + `SigV4` (pure, JVM tests in `wsconnect/test/`,
+  `./gradlew testDebugUnitTest --tests 'com.rutger.wsconnect.*'`). Mirrors the laptop's `logs.rs`/`sigv4.rs`.
+- PUT `https://cdn.rutgerpronk.com/wsconnect-logs/phone/<Build.MODEL>/<YYYY-MM-DD>/<HHMMSS>-<reason>.log` (UTC,
+  path-style, SigV4 header auth, signed payload, us-east-1, SeaweedFS). Body: header (device, app version, sdk,
+  reasons, time) + AppLog lines after the marker (prefs `wsconnect-logs`: last line of the last successful upload;
+  gone after rotation/clear → whole file), newest ~1 MB.
+- Reasons: `start` (process start, so also after an update), `link-connect`/`link-lost` (RFCOMM), `hotspot-on`/
+  `hotspot-fail`, `update` (blocking right before the install commit; install failed), `crash` (uncaught exception
+  handler writes the trace to AppLog synchronously, uploaded on the next start), `periodic` (10 min tick / worker,
+  only with new lines; `log upload: ` lines don't count), `manual` (LogActivity "Logs uploaden", status as extra).
+  Triggers within 5 s = one upload; failure keeps the marker, reasons retried with the next trigger.
+- **Key never in git** (public repo): write-only key read at build time by `wsconnect.gradle` from
+  `~/.config/wsconnect-logs/env` (`WSCONNECT_LOGS_ACCESS_KEY=…`, `WSCONNECT_LOGS_SECRET_KEY=…`; `WSCONNECT_LOGS_ENV`
+  overrides the path) into `BuildConfig.LOGS_*`. Missing → empty → upload off (one AppLog line, button hidden).
+  The build prints only found/MISSING. It does end up in the published APK: write-only, so worst case is junk uploads.
+- Debug lines for upstream parts (`Diag.kt`, `Clipboard.kt`, `TrackpadActivity`): per paired device reachable/link
+  types/plugin state on change, notification filter decisions mirrored from `NotificationsPlugin.sendNotification`
+  (keep in sync on upstream merges), clipboard sent/received/skipped-sensitive + READ_LOGS state, trackpad
+  open/close/dropped input. Package names and lengths only, never clipboard or notification text.

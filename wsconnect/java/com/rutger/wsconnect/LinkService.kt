@@ -22,6 +22,8 @@ import android.os.Looper
 import android.telephony.SignalStrength
 import android.telephony.TelephonyCallback
 import android.telephony.TelephonyManager
+import com.rutger.wsconnect.logs.LogUpload
+import com.rutger.wsconnect.logs.LogUploadLogic.Reason
 import com.rutger.wsconnect.ui.HomeActivity
 import com.rutger.wsconnect.update.Updater
 import org.kde.kdeconnect.BackgroundService
@@ -67,10 +69,11 @@ class LinkService : Service() {
 
     private val tetherListener: () -> Unit = { main.post { pushState(); checkShizuku(); armGoneTimeout() } }
 
-    /** Every [TICK_MS] while the service runs (WorkManager's minimum is 15 min): update check. */
+    /** Every [TICK_MS] while the service runs (WorkManager's minimum is 15 min): update check + periodic log upload. */
     private val tick = object : Runnable {
         override fun run() {
             Updater.checkAsync()
+            LogUpload.trigger(Reason.PERIODIC)
             main.postDelayed(this, TICK_MS)
         }
     }
@@ -231,6 +234,7 @@ class LinkService : Service() {
         clientsChanged()
         main.removeCallbacks(goneTimeout)
         AppLog.i("laptop connected ${c.label} (${clients.size} connected)")
+        LogUpload.trigger(Reason.LINK_CONNECT)
         c.send(stateBytes())
         c.startReader()
     }
@@ -240,6 +244,7 @@ class LinkService : Service() {
         if (!clients.remove(c)) return
         clientsChanged()
         AppLog.i("laptop disconnected ${c.label} (${clients.size} connected)")
+        LogUpload.trigger(Reason.LINK_LOST)
         if (running && clients.isEmpty() && Tether.wanted) main.postDelayed(goneTimeout, GONE_TIMEOUT_MS)
     }
 

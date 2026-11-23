@@ -11,6 +11,8 @@ import android.content.pm.PackageManager
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import com.rutger.wsconnect.logs.LogUpload
+import com.rutger.wsconnect.logs.LogUploadLogic.Reason
 import org.kde.kdeconnect_tp.BuildConfig
 import rikka.shizuku.Shizuku
 import java.util.concurrent.CopyOnWriteArrayList
@@ -171,12 +173,14 @@ object Tether {
         if (c == null) {
             lastError = true
             AppLog.i("$label: no shizuku helper (running=$shizukuRunning allowed=$shizukuAllowed)")
+            if (label == "on") LogUpload.trigger(Reason.HOTSPOT_FAIL)
             return@execute changed()
         }
         val results = runCatching { block(c) }.getOrElse { listOf("FAIL $it") }
         // DUPLICATE_REQUEST = already on, which is what we wanted.
         lastError = results.any { !it.startsWith("OK") && !it.contains("DUPLICATE_REQUEST") }
         results.forEach { AppLog.i("$label: $it") }
+        if (label == "on") LogUpload.trigger(if (lastError) Reason.HOTSPOT_FAIL else Reason.HOTSPOT_ON)
         changed()
     }
 

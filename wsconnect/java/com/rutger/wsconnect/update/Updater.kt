@@ -16,6 +16,8 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import com.rutger.wsconnect.AppLog
 import com.rutger.wsconnect.Tether
+import com.rutger.wsconnect.logs.LogUpload
+import com.rutger.wsconnect.logs.LogUploadLogic.Reason
 import com.rutger.wsconnect.ui.HomeActivity
 import org.json.JSONObject
 import org.kde.kdeconnect.helpers.LifecycleHelper
@@ -34,7 +36,7 @@ import java.util.concurrent.TimeUnit
  *   every 15 min as backup (any network).
  * - Download + sha256 verify, then install right away via a PackageInstaller session (Rutger: no waiting,
  *   also not for tethering or the app being on screen). The install kills the process: the hotspot is
- *   saved first ([Tether.saveForUpdate]) and restored by the new process.
+ *   saved first ([Tether.saveForUpdate]) and restored by the new process, logs are uploaded first.
  * - Silent (self-update, see [canInstallSilently]). Otherwise ("install unknown apps" not granted, Android
  *   asks anyway): Home card + notification, the user taps.
  */
@@ -119,7 +121,7 @@ object Updater {
             fetchRelease()
         } catch (e: Exception) {
             val msg = "controle: ${e.javaClass.simpleName}: ${e.message}"
-            // Every 10 min while offline: log only a new error.
+            // Every 10 min while offline: log only a new error (each line makes the periodic log upload run).
             if ((busy as? Status.Failed)?.message != msg) AppLog.i("update: check failed: $e")
             status = Status.Failed(msg, null)
             return describe()
@@ -174,8 +176,9 @@ object Updater {
             return
         }
         AppLog.i("update: committing v${r.versionCode}, interactive=$interactive")
-        // Point of no return (the install kills the process): remember the hotspot.
+        // Point of no return (the install kills the process): remember the hotspot, upload the log so far.
         Tether.saveForUpdate()
+        runCatching { LogUpload.uploadNow(Reason.UPDATE, "installing v${r.versionCode} (${r.versionName}), interactive=$interactive") }
         try {
             abandonSessions()
             val installer = app.packageManager.packageInstaller
@@ -202,6 +205,7 @@ object Updater {
             status = Status.Failed("installeren: ${e.javaClass.simpleName}: ${e.message}", r)
             failedInstall = r.versionCode to System.currentTimeMillis()
             Tether.clearRestore()
+            LogUpload.trigger(Reason.UPDATE)
         }
     }
 
@@ -223,6 +227,7 @@ object Updater {
                 status = Status.Failed("installeren mislukt ($code): $message", r)
                 failedInstall = versionCode to System.currentTimeMillis()
                 Tether.clearRestore()
+                LogUpload.trigger(Reason.UPDATE)
             }
         }
     }

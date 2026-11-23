@@ -78,9 +78,26 @@ object AppLog {
     fun text(): String = lines().joinToString("\n")
 
     /** Everything on disk (both files) after pending writes; blocks, call off the main thread. */
-    fun fullText(): String {
-        val f = file ?: return text()
-        return io.submit<String> { (readLines(rotated(f)) + readLines(f)).joinToString("\n") }.get()
+    fun fullText(): String = fullLines().joinToString("\n")
+    fun fullLines(): List<String> {
+        val f = file ?: return lines()
+        return io.submit<List<String>> { readLines(rotated(f)) + readLines(f) }.get()
+    }
+
+    /**
+     * Uncaught exception (crashing thread): [msgs] must hit the disk before the process dies, so write
+     * them through the io thread and wait (pending lines first), else append directly.
+     */
+    fun crash(msgs: List<String>) {
+        val now = fmt.get()!!.format(Date())
+        val stamped = msgs.map { "$now $it" }
+        msgs.forEach { Log.e("wsconnect", it) }
+        synchronized(lines) { lines.addAll(stamped) }
+        val f = file ?: return
+        val viaIo = runCatching {
+            io.submit { stamped.forEach { write(f, it) }; out?.flush() }.get(2, java.util.concurrent.TimeUnit.SECONDS)
+        }.isSuccess
+        if (!viaIo) runCatching { FileOutputStream(f, true).use { o -> stamped.forEach { o.write((it + "\n").toByteArray()) } } }
     }
 
     fun clear() {

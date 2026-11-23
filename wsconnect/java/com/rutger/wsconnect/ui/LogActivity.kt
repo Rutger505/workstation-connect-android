@@ -69,6 +69,8 @@ import com.rutger.wsconnect.AppLog
 import com.rutger.wsconnect.LinkService
 import com.rutger.wsconnect.Tether
 import com.rutger.wsconnect.WsConnect
+import com.rutger.wsconnect.logs.LogUpload
+import com.rutger.wsconnect.logs.LogUploadLogic.Reason
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -173,8 +175,9 @@ class LogActivity : AppCompatActivity() {
                     color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(bottom = 4.dp))
             }
             StatusCard(s)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Button(::exportToFile) { Text("Opslaan als bestand") }
+                if (LogUpload.enabled) FilledTonalButton(::upload) { Text("Logs uploaden") }
                 FilledTonalButton(::share) {
                     Icon(Icons.Filled.Share, null, Modifier.size(18.dp))
                     Spacer(Modifier.width(6.dp))
@@ -310,6 +313,16 @@ class LogActivity : AppCompatActivity() {
         lifecycleScope.launch {
             pendingExport = exportText()
             saveFile.launch(exportName())
+        }
+    }
+
+    /** Manual upload (lines since the last upload + the status chips as extra header). */
+    private fun upload() {
+        lifecycleScope.launch {
+            val status = statusText()
+            val r = withContext(Dispatchers.IO) { runCatching { LogUpload.uploadNow(Reason.MANUAL, status) } }
+            val msg = r.fold({ if (it != null) "Logs geüpload" else "Niets te uploaden" }, { "Uploaden mislukt: ${it.message}" })
+            Toast.makeText(this@LogActivity, msg, Toast.LENGTH_LONG).show()
         }
     }
 
