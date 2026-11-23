@@ -57,7 +57,9 @@ fi
 sha="$(sha256sum "$APK" | cut -d' ' -f1)"
 size="$(stat -c %s "$APK")"
 versioned="$NAME-$code.apk"
-echo "publishing $name ($code) over ${published:-nothing}"
+over=nothing
+[ -z "$published" ] || over="$(sed -n 's/.*"versionName": *"\([^"]*\)".*/\1/p' "$TMP/live.json") ($published)"
+echo "publishing $name ($code) over $over"
 
 verify() { # remote-name expected-sha256
   [ -n "${DRY_RUN:-}" ] && { echo "dry-run: verify $URL/$1"; return; }

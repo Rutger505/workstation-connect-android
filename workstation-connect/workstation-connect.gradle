@@ -8,10 +8,24 @@ ext.wsDroppedServices = [
     'org.kde.kdeconnect.plugins.remotekeyboardime.RemoteKeyboardService',
 ]
 
-def commitCount = providers.exec {
-    commandLine 'git', 'rev-list', '--count', 'HEAD'
+// Version: v<n>, n = first-parent commits since wsVersionBase (an upstream merge counts as 1).
+// wsVersionBase = main right before the versioning commit, so that commit is v1.
+// versionCode = 10000 + n: internal only (updater + Android's downgrade check). The offset keeps it above the
+// old scheme (versionCode = full commit count incl. upstream KDE history, last one ~4971).
+// Never lower the offset or move the base: Android refuses downgrades, Updater.kt compares versionCode.
+def wsVersionBase = 'cbf41fbcfd4f548371a95bbf0c78b8ab9d0b8db5'
+def wsVersionCodeOffset = 10000
+def versionCount = providers.exec {
+    commandLine 'git', 'rev-list', '--count', '--first-parent', "${wsVersionBase}..HEAD"
     ignoreExitValue = true
-}.standardOutput.asText.map { (it.trim() ?: '1') as int }
+}
+def wsVersion = versionCount.standardOutput.asText.get().trim()
+if (versionCount.result.get().exitValue != 0 || !(wsVersion ==~ /[1-9][0-9]*/)) {
+    throw new GradleException("wsconnect: can't compute the version (git rev-list --count --first-parent " +
+        "${wsVersionBase}..HEAD: '${wsVersion}' ${versionCount.standardError.asText.get().trim()}). " +
+        "Needs full git history containing ${wsVersionBase} (no shallow clone).")
+}
+wsVersion = wsVersion as int
 
 // -dirty: uncommitted changes. -local: update URL overridden (emulator tests). workstation-connect/publish refuses both.
 def dirty = providers.exec {
@@ -43,8 +57,8 @@ android {
     defaultConfig {
         applicationId = 'com.rutger.workstationconnect'
         minSdk = 33 // TetheringManager (Shizuku tethering) + Application.getProcessName
-        versionCode = commitCount.get()
-        versionName = "${versionName}+ws${commitCount.get()}" + (dirty.get() ? '-dirty' : '') + (updateUrl.get() ? '-local' : '')
+        versionCode = wsVersionCodeOffset + wsVersion
+        versionName = "v${wsVersion}" + (dirty.get() ? '-dirty' : '') + (updateUrl.get() ? '-local' : '')
         buildConfigField 'String', 'UPDATE_URL', "\"${updateUrl.get() ?: defaultUpdateUrl}\""
         buildConfigField 'String', 'LOGS_ACCESS_KEY', "\"${logsKey('WSCONNECT_LOGS_ACCESS_KEY')}\""
         buildConfigField 'String', 'LOGS_SECRET_KEY', "\"${logsKey('WSCONNECT_LOGS_SECRET_KEY')}\""

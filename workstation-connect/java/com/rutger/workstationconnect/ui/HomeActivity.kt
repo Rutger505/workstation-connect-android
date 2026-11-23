@@ -95,7 +95,7 @@ class HomeActivity : AppCompatActivity() {
     )
 
     @Immutable
-    data class Update(val versionCode: Int, val line: String, val canInstall: Boolean)
+    data class Update(val versionName: String, val line: String, val canInstall: Boolean)
 
     private val ui = mutableStateOf<Ui?>(null) // set in onCreate: snapshot() needs a context
     private var poll: Job? = null
@@ -198,7 +198,7 @@ class HomeActivity : AppCompatActivity() {
             is Updater.Status.Failed -> s.message
             else -> ""
         }
-        return Update(r.versionCode, line, s !is Updater.Status.Downloading && s !is Updater.Status.Installing)
+        return Update(r.versionName, line, s !is Updater.Status.Downloading && s !is Updater.Status.Installing)
     }
 
     private fun device(id: String) = KdeConnect.getInstance().getDevice(id)
@@ -247,7 +247,7 @@ class HomeActivity : AppCompatActivity() {
     )
 
     @Composable
-    private fun UpdateCard(u: Update) = Section("Update beschikbaar (v${u.versionCode})") {
+    private fun UpdateCard(u: Update) = Section("Update beschikbaar (${u.versionName})") {
         if (u.line.isNotEmpty()) Line(u.line)
         Button(Updater::installNow, enabled = u.canInstall) { Text("Nu installeren") }
     }

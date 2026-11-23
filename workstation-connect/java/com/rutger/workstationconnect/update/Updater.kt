@@ -44,6 +44,8 @@ object Updater {
     data class Release(val versionCode: Int, val versionName: String, val apk: String, val sha256: String, val size: Long) {
         fun json() = JSONObject().put("versionCode", versionCode).put("versionName", versionName)
             .put("apk", apk).put("sha256", sha256).put("size", size).toString()
+        /** For logs: versionName (shown to the user) + versionCode (what the updater compares). */
+        val label get() = "$versionName ($versionCode)"
         companion object {
             fun parse(s: String) = JSONObject(s).run {
                 Release(getInt("versionCode"), getString("versionName"), getString("apk"), getString("sha256"), getLong("size"))
@@ -54,7 +56,7 @@ object Updater {
     sealed interface Status {
         data object Idle : Status
         data object Checking : Status
-        data class UpToDate(val latest: Int) : Status
+        data class UpToDate(val latest: Release) : Status
         data class Downloading(val release: Release, val bytes: Long) : Status
         /** Not installable without a tap (install permission missing, or Android asked). */
         data class NeedsTap(val release: Release) : Status
@@ -130,20 +132,20 @@ object Updater {
             return describe()
         }
         if (release.versionCode <= BuildConfig.VERSION_CODE) {
-            if ((busy as? Status.UpToDate)?.latest != release.versionCode) log.d("check ($trigger): up to date (latest v${release.versionCode})")
+            if ((busy as? Status.UpToDate)?.latest?.versionCode != release.versionCode) log.d("check ($trigger): up to date (latest ${release.label})")
             dir().deleteRecursively()
             prefs().edit().remove("pending").apply()
             abandonSessions()
-            status = Status.UpToDate(release.versionCode)
+            status = Status.UpToDate(release)
             return describe()
         }
-        if (busy !is Status.NeedsTap && busy !is Status.Failed) log.i("check ($trigger): v${release.versionCode} (${release.versionName}) available")
+        if (busy !is Status.NeedsTap && busy !is Status.Failed) log.i("check ($trigger): ${release.label} available")
         try {
             download(release)
         } catch (e: Exception) {
             val msg = "download: ${e.javaClass.simpleName}: ${e.message}"
-            if ((busy as? Status.Failed)?.message != msg) log.e("download v${release.versionCode} failed", e)
-            else log.d("download v${release.versionCode} failed again: ${e.javaClass.simpleName}")
+            if ((busy as? Status.Failed)?.message != msg) log.e("download ${release.label} failed", e)
+            else log.d("download ${release.label} failed again: ${e.javaClass.simpleName}")
             status = Status.Failed(msg, release)
             return describe()
         }
@@ -151,17 +153,17 @@ object Updater {
         val silent = canInstallSilently()
         // Checks run every 10 min: repeat nothing for a release that already waits for a tap or just failed.
         if (!silent && busy is Status.NeedsTap && busy.release == release) {
-            log.d("v${release.versionCode} still waits for a tap: nothing to do")
+            log.d("${release.label} still waits for a tap: nothing to do")
             status = busy
             return describe()
         }
         val failed = failedInstall
         if (silent && failed != null && failed.first == release.versionCode && System.currentTimeMillis() - failed.second < RETRY_FAILED_MS) {
-            log.d("v${release.versionCode} install failed ${(System.currentTimeMillis() - failed.second) / 60_000} min ago: retry after ${RETRY_FAILED_MS / 60_000} min")
+            log.d("${release.label} install failed ${(System.currentTimeMillis() - failed.second) / 60_000} min ago: retry after ${RETRY_FAILED_MS / 60_000} min")
             status = busy
             return describe()
         }
-        log.i("v${release.versionCode} downloaded, silent=$silent")
+        log.i("${release.label} downloaded, silent=$silent")
         if (silent) commit(release, interactive = false) else {
             status = Status.NeedsTap(release)
             notifyNeedsTap(release)
@@ -172,7 +174,7 @@ object Updater {
     /** User tapped "Nu installeren". Installs right away. */
     fun installNow() = worker.execute {
         val r = available ?: pending() ?: return@execute log.w("install now: no update available")
-        log.i("install now tapped (v${r.versionCode})")
+        log.i("install now tapped (${r.label})")
         if (!apkFile(r).exists()) { log.i("install now: apk missing, downloading first"); check("install now"); return@execute }
         commit(r, interactive = true)
     }
@@ -182,12 +184,12 @@ object Updater {
         val file = apkFile(r)
         if (!file.exists()) {
             status = Status.Failed("installeren: ${file.name} ontbreekt", r)
-            return log.e("commit v${r.versionCode}: ${file.name} missing")
+            return log.e("commit ${r.label}: ${file.name} missing")
         }
-        log.i("committing v${r.versionCode} (${file.length() / 1024} KiB), interactive=$interactive")
+        log.i("committing ${r.label} (${file.length() / 1024} KiB), interactive=$interactive")
         // Point of no return (the install kills the process): remember the hotspot, upload the log so far.
         Tether.saveForUpdate()
-        runCatching { LogUpload.uploadNow(Reason.UPDATE, "installing v${r.versionCode} (${r.versionName}), interactive=$interactive") }
+        runCatching { LogUpload.uploadNow(Reason.UPDATE, "installing ${r.label}, interactive=$interactive") }
             .onFailure { log.w("log upload before the install failed, installing anyway: ${it.javaClass.simpleName}") }
         try {
             abandonSessions()
@@ -212,7 +214,7 @@ object Updater {
                 session.commit(PendingIntent.getBroadcast(app, id, intent, PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT).intentSender)
             }
         } catch (e: Exception) {
-            log.e("commit v${r.versionCode} failed", e)
+            log.e("commit ${r.label} failed", e)
             status = Status.Failed("installeren: ${e.javaClass.simpleName}: ${e.message}", r)
             failedInstall = r.versionCode to System.currentTimeMillis()
             Tether.clearRestore()
@@ -223,9 +225,10 @@ object Updater {
     /** [UpdateReceiver]: PackageInstaller session result. */
     internal fun onInstallResult(code: Int, message: String?, confirm: Intent?, interactive: Boolean, versionCode: Int) {
         val r = pending()?.takeIf { it.versionCode == versionCode } ?: available
+        val label = r?.takeIf { it.versionCode == versionCode }?.label ?: "versionCode $versionCode"
         when (code) {
             PackageInstaller.STATUS_PENDING_USER_ACTION -> {
-                log.w("v$versionCode needs confirmation (interactive=$interactive): $message")
+                log.w("$label needs confirmation (interactive=$interactive): $message")
                 r?.let { status = Status.NeedsTap(it) } // stays on the card if the dialog is cancelled
                 Tether.clearRestore()
                 if (interactive && confirm != null && LifecycleHelper.isInForeground) {
@@ -235,9 +238,9 @@ object Updater {
                     r?.let(::notifyNeedsTap)
                 }
             }
-            PackageInstaller.STATUS_SUCCESS -> log.i("v$versionCode installed")
+            PackageInstaller.STATUS_SUCCESS -> log.i("$label installed")
             else -> {
-                log.e("v$versionCode install failed: status=$code $message")
+                log.e("$label install failed: status=$code $message")
                 status = Status.Failed("installeren mislukt ($code): $message", r)
                 failedInstall = versionCode to System.currentTimeMillis()
                 Tether.clearRestore()
@@ -251,10 +254,10 @@ object Updater {
         val state = when (val s = status) {
             Status.Idle -> "not checked"
             Status.Checking -> "checking"
-            is Status.UpToDate -> "up to date (latest v${s.latest})"
-            is Status.Downloading -> "downloading v${s.release.versionCode}: ${s.bytes / 1_048_576}/${s.release.size / 1_048_576} MB"
-            is Status.NeedsTap -> "v${s.release.versionCode} needs a tap"
-            is Status.Installing -> "installing v${s.release.versionCode}"
+            is Status.UpToDate -> "up to date (latest ${s.latest.label})"
+            is Status.Downloading -> "downloading ${s.release.label}: ${s.bytes / 1_048_576}/${s.release.size / 1_048_576} MB"
+            is Status.NeedsTap -> "${s.release.label} needs a tap"
+            is Status.Installing -> "installing ${s.release.label}"
             is Status.Failed -> "FAILED ${s.message}"
         }
         return "${BuildConfig.VERSION_NAME}: $state; installer=${info?.installingPackageName} updateOwner=${info?.updateOwnerPackageName}"
@@ -306,8 +309,8 @@ object Updater {
     /** Downloads to .part, renamed only after the sha256 matches: an existing final file is verified. */
     private fun download(r: Release) {
         val target = apkFile(r)
-        if (target.exists()) return log.d("v${r.versionCode} already downloaded")
-        log.i("downloading v${r.versionCode} (${r.size / 1024} KiB)")
+        if (target.exists()) return log.d("${r.label} already downloaded")
+        log.i("downloading ${r.label} (${r.size / 1024} KiB)")
         val t0 = System.currentTimeMillis()
         dir().deleteRecursively()
         dir().mkdirs()
@@ -344,7 +347,7 @@ object Updater {
             error("sha256 mismatch: $sha, expected ${r.sha256}")
         }
         if (!part.renameTo(target)) error("rename ${part.name} failed")
-        log.i("v${r.versionCode} downloaded + sha256 verified in ${System.currentTimeMillis() - t0} ms")
+        log.i("${r.label} downloaded + sha256 verified in ${System.currentTimeMillis() - t0} ms")
     }
 
     /** Opens Home (update card), not Android's confirm dialog directly. */
@@ -357,12 +360,12 @@ object Updater {
         runCatching {
             nm.notify(NOTIFICATION_ID, Notification.Builder(app, NotificationHelper.Channels.DEFAULT)
                 .setSmallIcon(android.R.drawable.stat_sys_download_done)
-                .setContentTitle("Update v${r.versionCode} klaar, tik om te installeren")
+                .setContentTitle("Update ${r.versionName} klaar, tik om te installeren")
                 .setContentIntent(open)
                 .setOnlyAlertOnce(true)
                 .setAutoCancel(true)
                 .build())
-        }.onSuccess { log.i("needs-tap notification shown (v${r.versionCode})") }
+        }.onSuccess { log.i("needs-tap notification shown (${r.label})") }
             .onFailure { log.e("needs-tap notification failed", it) }
     }
 
@@ -370,8 +373,9 @@ object Updater {
         val p = prefs()
         val previous = p.getInt("versionCode", -1)
         if (previous == BuildConfig.VERSION_CODE) return
-        log.i("now running ${BuildConfig.VERSION_NAME}, was v$previous")
-        p.edit().clear().putInt("versionCode", BuildConfig.VERSION_CODE).apply()
+        val previousName = p.getString("versionName", null) // missing before the v<n> scheme
+        log.i("now running ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}), was ${previousName ?: "?"} ($previous)")
+        p.edit().clear().putInt("versionCode", BuildConfig.VERSION_CODE).putString("versionName", BuildConfig.VERSION_NAME).apply()
         app.getSystemService(NotificationManager::class.java).cancel(NOTIFICATION_ID)
     }
 }

@@ -9,7 +9,7 @@ Link protocol: single source in the laptop repo README (Rutger505/workstation-co
 - **Git**: commit + push straight to `main`. Exception: upstream merges in a branch `upstream-vX.Y.Z` + PR (steps in WORKSTATION-CONNECT.md). Remote `upstream` = invent.kde.org.
 - Our code only in `workstation-connect/` + the marked upstream hooks listed in WORKSTATION-CONNECT.md. Keep own changes in few separate files/commits so upstream merges stay cheap.
 - Never edit upstream strings: "Workstation Connect" rebrand happens at build time in `workstation-connect.gradle`. apply-from scripts can't see AGP classes: load them reflectively.
-- App id `com.rutger.workstationconnect` (was `com.rutger.wsconnect`: different app to Android), versionCode = commit count, ship the **debug** build (upstream `debug.keystore`). Build of a dirty tree = `-dirty`, publish refuses it: commit first.
+- App id `com.rutger.workstationconnect` (was `com.rutger.wsconnect`: different app to Android), version `v<n>` (versionCode 10000 + n, see WORKSTATION-CONNECT.md), ship the **debug** build (upstream `debug.keystore`). Build of a dirty tree = `-dirty`, publish refuses it: commit first.
 - Publish only via `workstation-connect/publish` on a clean, pushed main (`DRY_RUN=1` to check). Never copy the APK to the CDN by hand: installed apps auto-update from `update.json` (`version.json` = retired channel of the old app id: never write it).
 - Logs key never in git (public repo): read at build time from `~/.config/wsconnect-logs/env`.
 - Unit tests: `./gradlew testDebugUnitTest --tests 'com.rutger.workstationconnect.*'`.

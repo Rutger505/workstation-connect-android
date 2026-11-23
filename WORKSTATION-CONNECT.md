@@ -23,7 +23,10 @@ notifications, clipboard, files). Laptop side: [Rutger505/workstation-connect](h
   deleted, not excluded, because KSP's plugin index ignores source-set excludes
 - Rebrand "KDE Connect" → "Workstation Connect" happens at build time in `workstation-connect.gradle` (generated res
   overlay of every upstream string containing it, all locales + merged-manifest label rewrite); never edit upstream strings
-- App id `com.rutger.workstationconnect`, versionCode = commit count, we ship the debug build
+- App id `com.rutger.workstationconnect`, we ship the debug build. versionName `v<n>`, n = first-parent commits since
+  `wsVersionBase` in `workstation-connect/workstation-connect.gradle` (upstream merge = 1); needs full history (no shallow clone).
+  versionCode = 10000 + n, internal only (updater, downgrade check): the offset stays above the old
+  commit-count scheme (last ~4971). UI/logs show versionName
   (signed with upstream's `debug.keystore`, so updates install over each other).
 
 ## Link (LinkService)

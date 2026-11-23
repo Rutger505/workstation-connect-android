@@ -57,7 +57,7 @@ object AppLog {
             file = f
             early
         }
-        log(Level.I, "app", "--- app start v${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}), " +
+        log(Level.I, "app", "--- app start ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}), " +
             "Android ${Build.VERSION.RELEASE} ---")
         append(old)
     }
