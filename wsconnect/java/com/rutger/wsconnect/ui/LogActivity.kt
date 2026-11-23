@@ -150,7 +150,6 @@ class LogActivity : AppCompatActivity() {
             ),
             "Tethering" to listOf(
                 item("gewenst", Tether.wanted),
-                item("bluetooth", Tether.btTethered),
                 item("hotspot", Tether.hotspotOn),
                 if (Tether.lastError) Item("fout", Level.ERROR) else Item("geen fout", Level.OK),
             ),
@@ -207,7 +206,6 @@ class LogActivity : AppCompatActivity() {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text("Test", Modifier.width(84.dp), style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
                     OutlinedButton(Tether::on) { Text("Aan") }
-                    OutlinedButton(Tether::btOff) { Text("BT uit") }
                     OutlinedButton(Tether::off) { Text("Uit") }
                 }
             }
@@ -361,7 +359,7 @@ class LogActivity : AppCompatActivity() {
         private val ERROR_WORDS = listOf("fail", "error", "refused", "rejected", "exception", "denied", "mislukt")
         private val WARN_WORDS = listOf("gatt restart", "no subscribe", "warning", "gone", "rate limit", "bluetooth off", "skipped")
         private val BLE_WORDS = listOf("ble", "gatt", "laptop", "advertis", "watchdog", "subscribe", "bluetooth")
-        private val TETHER_WORDS = listOf("tether", "hotspot", "shizuku", "helper", "laptop: on", "laptop: off", "laptop: bt off")
+        private val TETHER_WORDS = listOf("tether", "hotspot", "shizuku", "helper", "laptop: on", "laptop: off")
 
         /** "yyyy-MM-dd HH:mm:ss.SSS msg" → ("HH:mm:ss", msg); other lines (old format, separators) as-is. */
         fun split(line: String): Pair<String, String> {

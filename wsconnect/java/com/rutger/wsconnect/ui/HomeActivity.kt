@@ -89,7 +89,7 @@ class HomeActivity : AppCompatActivity() {
     data class Ui(
         val laptop: Laptop?, val candidates: List<Candidate>, val setup: List<String>,
         val linkEnabled: Boolean, val shizukuReady: Boolean, val error: Boolean, val hotspot: Boolean,
-        val bt: Boolean, val wanted: Boolean, val bleLaptop: Boolean, val notifyAccess: Boolean,
+        val wanted: Boolean, val bleLaptop: Boolean, val notifyAccess: Boolean,
         val autoClip: Boolean, val kdeBluetooth: Boolean, val update: Update?,
     )
 
@@ -160,7 +160,7 @@ class HomeActivity : AppCompatActivity() {
         return Ui(
             laptop = laptop, candidates = candidates, setup = setupSteps(d),
             linkEnabled = WsConnect.linkEnabled(this), shizukuReady = Tether.ready, error = Tether.lastError,
-            hotspot = Tether.hotspotOn, bt = Tether.btTethered, wanted = Tether.wanted,
+            hotspot = Tether.hotspotOn, wanted = Tether.wanted,
             bleLaptop = LinkService.laptopConnected,
             notifyAccess = NotificationManagerCompat.getEnabledListenerPackages(this).contains(packageName),
             autoClip = Clipboard.autoSync(this),
@@ -291,7 +291,7 @@ class HomeActivity : AppCompatActivity() {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text("Automatisch", style = MaterialTheme.typography.bodyLarge)
-                Line("Laptop zonder internet → Bluetooth-tethering + hotspot aan")
+                Line("Laptop zonder internet → hotspot aan")
             }
             Switch(s.linkEnabled, { setLink(it) })
         }
@@ -299,16 +299,14 @@ class HomeActivity : AppCompatActivity() {
         Line(when {
             !s.shizukuReady -> "Shizuku niet klaar: hotspot kan niet aan"
             s.error -> "Laatste poging mislukt, zie Log"
-            s.hotspot && s.bt -> "Hotspot + Bluetooth aan (laptop stapt over)"
             s.hotspot -> "Hotspot aan"
-            s.bt -> "Bluetooth-tethering aan, hotspot start"
             s.wanted -> "Bezig met aanzetten…"
             else -> "Klaar, staat uit"
         }, warn = !s.shizukuReady || s.error)
         Line(if (s.bleLaptop) "Laptop in de buurt (Bluetooth)" else "Laptop niet in de buurt (Bluetooth)")
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(Tether::on, enabled = s.shizukuReady && !s.wanted) { Text("Nu aanzetten") }
-            OutlinedButton(Tether::off, enabled = s.wanted || s.hotspot || s.bt) { Text("Uitzetten") }
+            OutlinedButton(Tether::off, enabled = s.wanted || s.hotspot) { Text("Uitzetten") }
         }
     }
 
@@ -371,7 +369,7 @@ class HomeActivity : AppCompatActivity() {
         if (!Updater.tetherBusy) return Updater.installNow()
         AlertDialog.Builder(this)
             .setTitle("Hotspot valt even weg")
-            .setMessage("Tijdens de update herstart de app en gaan hotspot en Bluetooth-tethering uit. " +
+            .setMessage("Tijdens de update herstart de app en gaat de hotspot uit. " +
                 "Je laptop verliest dan even internet. Toch nu installeren?")
             .setPositiveButton("Installeren") { _, _ -> Updater.installNow() }
             .setNegativeButton("Later", null)

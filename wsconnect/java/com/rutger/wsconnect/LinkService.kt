@@ -36,7 +36,7 @@ import org.kde.kdeconnect.helpers.NotificationHelper
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * Foreground service: BLE GATT server the laptop talks to. Turns tethering on/off on command and
+ * Foreground service: BLE GATT server the laptop talks to. Turns the Wi-Fi hotspot on/off on command and
  * notifies the laptop of tethering flags, battery and signal. If the laptop disappears while
  * tethering is wanted, turns it off after [GONE_TIMEOUT_MS].
  */
@@ -267,8 +267,8 @@ class LinkService : Service() {
             if (!ok) return AppLog.i("rejected write from ${device.address} (bond=${device.bondState})")
             when (value!![0]) {
                 Proto.CMD_ON -> { AppLog.i("laptop: on"); Tether.on() }
-                Proto.CMD_ON_BT -> { AppLog.i("laptop: on (bt only)"); Tether.onBt() }
-                Proto.CMD_BT_OFF -> { AppLog.i("laptop: bt off"); Tether.btOff() }
+                Proto.CMD_RETIRED_BT_OFF, Proto.CMD_RETIRED_ON_BT ->
+                    AppLog.i("laptop: retired command ${value[0]} ignored (protocol < 4?)")
                 Proto.CMD_OFF -> { AppLog.i("laptop: off"); Tether.off() }
                 Proto.CMD_NET_CHANGED -> { AppLog.i("laptop: net changed"); Links.dropLaptopLan(this@LinkService) }
                 else -> AppLog.i("laptop: unknown command ${value[0]}")
@@ -341,7 +341,6 @@ class LinkService : Service() {
     private fun stateBytes(): ByteArray {
         var flags = 0
         if (Tether.ready) flags = flags or Proto.FLAG_SHIZUKU
-        if (Tether.btTethered) flags = flags or Proto.FLAG_BT_TETHER
         if (Tether.hotspotOn) flags = flags or Proto.FLAG_HOTSPOT
         if (Tether.wanted) flags = flags or Proto.FLAG_WANTED
         if (Tether.lastError) flags = flags or Proto.FLAG_ERROR

@@ -16,8 +16,6 @@ import java.util.concurrent.Executors
 
 /** Process-wide owner of the Shizuku helper and the phone's tethering state. */
 object Tether {
-    private const val WIFI = 0
-    private const val BT = 2
     private const val TETHER_STATE_CHANGED = "android.net.conn.TETHER_STATE_CHANGED"
 
     private val worker = Executors.newSingleThreadExecutor()
@@ -25,7 +23,6 @@ object Tether {
     @Volatile private var control: ITetherControl? = null
 
     @Volatile var wanted = false; private set
-    @Volatile var btTethered = false; private set
     @Volatile var hotspotOn = false; private set
     @Volatile var lastError = false; private set
 
@@ -93,26 +90,16 @@ object Tether {
         done(r)
     }
 
-    /** BT tethering first (fast), then the hotspot (fast enough for updates). */
     fun on() {
         wanted = true
         changed()
-        run("on") { c -> listOf(c.start(BT), c.start(WIFI)) }
+        run("on") { c -> listOf(c.startHotspot()) }
     }
-
-    /** BT tethering only: the laptop has the hotspot turned off (its config `hotspot = false`). */
-    fun onBt() {
-        wanted = true
-        changed()
-        run("on bt") { c -> listOf(c.start(BT)) }
-    }
-
-    fun btOff() = run("bt off") { c -> listOf(c.stop(BT)) }
 
     fun off() {
         wanted = false
         changed()
-        run("off") { c -> listOf(c.stop(BT), c.stop(WIFI)) }
+        run("off") { c -> listOf(c.stopHotspot()) }
     }
 
     private fun run(label: String, block: (ITetherControl) -> List<String>) = worker.execute {
@@ -131,14 +118,13 @@ object Tether {
 
     private fun onTetherState(intent: Intent) {
         val active = intent.getStringArrayListExtra("tetherArray") ?: return
-        btTethered = active.any { it.startsWith("bt-pan") }
         hotspotOn = active.any { isWifi(it) }
         AppLog.i("tethered: ${active.ifEmpty { listOf("none") }.joinToString()}")
         changed()
     }
 
-    private fun isWifi(iface: String) = !iface.startsWith("bt-pan") &&
-        listOf("rndis", "ncm", "usb", "eth").none { iface.startsWith(it) }
+    // bt-pan: Bluetooth tethering the user turned on by hand, not ours.
+    private fun isWifi(iface: String) = listOf("bt-pan", "rndis", "ncm", "usb", "eth").none { iface.startsWith(it) }
 
     private fun changed() = listeners.forEach { it() }
 }

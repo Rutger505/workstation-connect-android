@@ -86,7 +86,7 @@ object Updater {
     @Volatile var status: Status = Status.Idle; private set
 
     /** Laptop may be using the phone's internet: never let an install kill the process now. */
-    val tetherBusy: Boolean get() = Tether.wanted || Tether.btTethered || Tether.hotspotOn
+    val tetherBusy: Boolean get() = Tether.wanted || Tether.hotspotOn
 
     /** Release shown on Home's update card, if any. */
     val available: Release?

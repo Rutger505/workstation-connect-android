@@ -1,7 +1,7 @@
 # workstation-connect (Android)
 
 Fork of [KDE Connect Android](https://invent.kde.org/network/kdeconnect-android) (GPL) with
-workstation-connect built in: own home screen, auto hotspot (BLE + Shizuku tethering), trackpad
+workstation-connect built in: own home screen, auto Wi-Fi hotspot (BLE control link + Shizuku; hotspot is the only tethering, no Bluetooth tethering), trackpad
 with volume keys as mouse buttons. KDE Connect stays the engine (pairing, encryption,
 notifications, clipboard, files). Laptop side: [Rutger505/workstation-connect](https://github.com/Rutger505/workstation-connect).
 
@@ -23,6 +23,14 @@ notifications, clipboard, files). Laptop side: [Rutger505/workstation-connect](h
   overlay of every upstream string containing it, all locales + merged-manifest label rewrite); never edit upstream strings
 - App id `com.rutger.wsconnect`, versionCode = commit count, we ship the debug build
   (signed with upstream's `debug.keystore`, so updates install over each other).
+
+## BLE protocol (v4)
+
+- `wsconnect/.../Proto.kt`, keep in sync with the laptop's `proto.rs`. GATT server in `LinkService` (bonded laptops only)
+- CONTROL: `CMD_OFF` (0) stops the hotspot, `CMD_ON` (1) starts it, `CMD_NET_CHANGED` (3) drops the laptop's LAN links.
+  2 and 4 (old BT tethering commands) are retired: logged + ignored, never reuse
+- STATE flags: 1 Shizuku, 2 unused (was BT tethered, always 0, never reuse), 4 hotspot, 8 wanted, 16 error
+- Laptop BLE gone 3 min while wanted → hotspot off
 
 ## Upstream updates
 
@@ -52,8 +60,8 @@ echo "sdk.dir=$ANDROID_HOME" > local.properties
   `WSCONNECT_UPDATE_URL=<url>` at build time overrides it (adds `-local` to versionName). Uncommitted changes add `-dirty`.
 - Silent = self-update (`UPDATE_PACKAGES_WITHOUT_USER_ACTION` + `USER_ACTION_NOT_REQUIRED`), also right after an
   adb/browser install, as long as "install unknown apps" is granted. Otherwise: Home card + notification, tap.
-- **Tether guard**: an update kills the process (and the hotspot/BT tethering the laptop may use). Silent installs
-  wait while `Tether.wanted`/`btTethered`/`hotspotOn`, retried on every tether change. Then: Android 14+ with us as
+- **Tether guard**: an update kills the process (and the hotspot the laptop may use). Silent installs
+  wait while `Tether.wanted`/`hotspotOn`, retried on every tether change. Then: Android 14+ with us as
   installer of record → `waitForInstallConstraints` (app not top-visible, not in a call), committed on its callback
   after re-checking the guard; else (Android 13, first update after a manual install) our own check, retried when
   the app leaves the screen. "Nu installeren" while tethering asks for confirmation first.
@@ -70,4 +78,4 @@ commit, dropped afterwards) with `WSCONNECT_UPDATE_URL=http://10.0.2.2:8765/`; s
 `workstation-connect-<code>.apk` + `version.json` with `python3 -m http.server 8765 --bind 127.0.0.1`; install A,
 `appops set com.rutger.wsconnect REQUEST_INSTALL_PACKAGES allow`, enable the link, leave the app → B installs,
 `dumpsys activity services com.rutger.wsconnect` shows LinkService. Fake tethering (as `adb root`):
-`am broadcast -a android.net.conn.TETHER_STATE_CHANGED --esal tetherArray bt-pan` (`rndis0` = idle again).
+`am broadcast -a android.net.conn.TETHER_STATE_CHANGED --esal tetherArray wlan1` (`rndis0` = idle again).

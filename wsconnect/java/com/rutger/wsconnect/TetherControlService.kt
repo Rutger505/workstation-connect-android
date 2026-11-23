@@ -41,17 +41,17 @@ class TetherControlService : ITetherControl.Stub {
             "build=${Build.DISPLAY} pkg=${shell.opPackageName}" +
             (if (setupError.isEmpty()) "" else " SETUP ERRORS: $setupError")
 
-    override fun start(type: Int): String {
-        val exempt = startOnce(type, exemptFromEntitlement = true)
+    override fun startHotspot(): String {
+        val exempt = startOnce(WIFI, exemptFromEntitlement = true)
         if (exempt.ok) return "OK ${exempt.line}"
-        val plain = startOnce(type, exemptFromEntitlement = false)
+        val plain = startOnce(WIFI, exemptFromEntitlement = false)
         return if (plain.ok) "OK ${plain.line}" else "FAIL exempt[${exempt.line}] plain[${plain.line}]"
     }
 
-    override fun stop(type: Int): String = runCatching {
+    override fun stopHotspot(): String = runCatching {
         val t0 = System.nanoTime()
-        managerClass.getMethod("stopTethering", Int::class.javaPrimitiveType).invoke(manager, type)
-        "OK stopTethering(${typeName(type)}) in ${ms(t0)} ms"
+        managerClass.getMethod("stopTethering", Int::class.javaPrimitiveType).invoke(manager, WIFI)
+        "OK stopTethering(wifi) in ${ms(t0)} ms"
     }.getOrElse { "FAIL stopTethering: ${describe(it)}" }
 
     override fun shell(command: String): String = runCatching {
@@ -98,11 +98,12 @@ class TetherControlService : ITetherControl.Stub {
         ).invoke(manager, request, Executor { it.run() }, callback)
         latch.await(START_TIMEOUT_MS, TimeUnit.MILLISECONDS)
         val tag = if (exemptFromEntitlement) "exempt" else "plain"
-        Result(ok, "${typeName(type)} $tag: $outcome in ${ms(t0)} ms")
+        Result(ok, "wifi $tag: $outcome in ${ms(t0)} ms")
     }.getOrElse { Result(false, describe(it)) }
 
     private companion object {
         const val SHELL = "com.android.shell"
+        const val WIFI = 0 // TetheringManager.TETHERING_WIFI
         const val START_TIMEOUT_MS = 20_000L
 
         val ERRORS = mapOf(
@@ -115,7 +116,6 @@ class TetherControlService : ITetherControl.Stub {
             18 to "DUPLICATE_REQUEST", 19 to "BLUETOOTH_SERVICE_PENDING", 20 to "SOFT_AP_CALLBACK_PENDING",
         )
 
-        fun typeName(type: Int) = when (type) { 0 -> "wifi"; 2 -> "bluetooth"; else -> "type$type" }
         fun ms(t0: Long) = (System.nanoTime() - t0) / 1_000_000
         fun describe(t: Throwable): String {
             val root = generateSequence(t) { it.cause }.last()
