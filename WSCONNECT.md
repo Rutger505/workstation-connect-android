@@ -62,19 +62,21 @@ echo "sdk.dir=$ANDROID_HOME" > local.properties
 
 ## Updates
 
-- `wsconnect/java/.../update/Updater.kt`: checks `version.json` at app start, on Home resume (max every 30 min)
-  and every 6 h (WorkManager, any network incl. mobile data); downloads, verifies sha256, installs via a
-  PackageInstaller session. Base URL: `BuildConfig.UPDATE_URL` = `https://cdn.rutgerpronk.com/artifacts/workstation-connect/`,
+- `wsconnect/java/.../update/Updater.kt`: checks `version.json` at app start, on Home resume (max every 30 min),
+  every 10 min from `LinkService` (Handler tick) and every 15 min via WorkManager (backup, also with the link off;
+  any network incl. mobile data); downloads, verifies sha256 and installs right away via a PackageInstaller
+  session: no waiting for tethering, the app being on screen or install constraints (Rutger's wish). Base URL:
+  `BuildConfig.UPDATE_URL` = `https://cdn.rutgerpronk.com/artifacts/workstation-connect/`,
   `WSCONNECT_UPDATE_URL=<url>` at build time overrides it (adds `-local` to versionName). Uncommitted changes add `-dirty`.
 - Silent = self-update (`UPDATE_PACKAGES_WITHOUT_USER_ACTION` + `USER_ACTION_NOT_REQUIRED`), also right after an
   adb/browser install, as long as "install unknown apps" is granted. Otherwise: Home card + notification, tap.
-- **Tether guard**: an update kills the process (and the hotspot the laptop may use). Silent installs
-  wait while `Tether.wanted`/`hotspotOn`, retried on every tether change. Then: Android 14+ with us as
-  installer of record → `waitForInstallConstraints` (app not top-visible, not in a call), committed on its callback
-  after re-checking the guard; else (Android 13, first update after a manual install) our own check, retried when
-  the app leaves the screen. "Nu installeren" while tethering asks for confirmation first.
-- No `setAppNotForegroundRequired` (counts foreground services: LinkService always runs) and no
-  `setAppNotInteractingRequired` (counts any wifi/mobile traffic of the app in the last 10 min).
+  A failed silent install of a version is retried after 1 h. Checks every 10 min log only new errors.
+- **Hotspot across the update** (the install kills the process): before the commit `Tether.saveForUpdate` stores
+  "wanted" with a timestamp (prefs `wsconnect-tether`). The new process
+  (`WsConnect.init`, also `BootReceiver` on MY_PACKAGE_REPLACED, idempotent) calls `Tether.restoreAfterUpdate`:
+  wanted again right away (laptop sees FLAG_WANTED), hotspot on once the Shizuku helper binds; ignored when older
+  than 5 min, gives up after 5 min without helper. No laptop reconnecting within 3 min → off (`armGoneTimeout`).
+  Install failed/needs a tap → flag cleared.
 - After an update `BootReceiver` (MY_PACKAGE_REPLACED) restarts LinkService: the start from `Application.onCreate`
   is refused there (background FGS start), the broadcast is exempt. Shizuku helper rebinds via `Tether.init`.
 - Publish (Rutger): `wsconnect/publish [apk]` uploads `workstation-connect-<versionCode>.apk`, server-side copies it
@@ -84,6 +86,7 @@ echo "sdk.dir=$ANDROID_HOME" > local.properties
 Emulator test (AVD `WsConnect_API35`, port 5590): build A and B (B = one commit later, e.g. a temporary empty
 commit, dropped afterwards) with `WSCONNECT_UPDATE_URL=http://10.0.2.2:8765/`; serve B as
 `workstation-connect-<code>.apk` + `version.json` with `python3 -m http.server 8765 --bind 127.0.0.1`; install A,
-`appops set com.rutger.wsconnect REQUEST_INSTALL_PACKAGES allow`, enable the link, leave the app → B installs,
+`appops set com.rutger.wsconnect REQUEST_INSTALL_PACKAGES allow`, enable the link → B installs right away,
 `dumpsys activity services com.rutger.wsconnect` shows LinkService. Fake tethering (as `adb root`):
 `am broadcast -a android.net.conn.TETHER_STATE_CHANGED --esal tetherArray wlan1` (`rndis0` = idle again).
+

@@ -8,7 +8,9 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.ServiceConnection
 import android.content.pm.PackageManager
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import org.kde.kdeconnect_tp.BuildConfig
 import rikka.shizuku.Shizuku
 import java.util.concurrent.CopyOnWriteArrayList
@@ -17,10 +19,17 @@ import java.util.concurrent.Executors
 /** Process-wide owner of the Shizuku helper and the phone's tethering state. */
 object Tether {
     private const val TETHER_STATE_CHANGED = "android.net.conn.TETHER_STATE_CHANGED"
+    private const val PREFS = "wsconnect-tether"
+    private const val KEY_RESTORE_AT = "restore_after_update_at"
+    /** A saved "hotspot wanted" older than this is ignored, and a restore waiting for Shizuku gives up. */
+    private const val RESTORE_MAX_MS = 5 * 60_000L
 
     private val worker = Executors.newSingleThreadExecutor()
     private val listeners = CopyOnWriteArrayList<() -> Unit>()
     @Volatile private var control: ITetherControl? = null
+    private val main = Handler(Looper.getMainLooper())
+    private lateinit var app: Context
+    @Volatile private var restorePending = false
 
     @Volatile var wanted = false; private set
     @Volatile var hotspotOn = false; private set
@@ -44,7 +53,12 @@ object Tether {
             control = c
             worker.execute { AppLog.i("shizuku helper: ${runCatching { c.whoami() }.getOrElse { it.toString() }}") }
             changed()
-            if (wanted) on() // phone/Shizuku restarted while the laptop wanted internet
+            if (restorePending) {
+                restorePending = false
+                AppLog.i("hotspot restore: shizuku helper ready, hotspot on")
+                clearRestore()
+            }
+            if (wanted) on() // phone/Shizuku/app (update) restarted while the laptop wanted internet
         }
         override fun onServiceDisconnected(name: ComponentName?) {
             control = null
@@ -54,6 +68,7 @@ object Tether {
     }
 
     fun init(context: Context) {
+        app = context.applicationContext
         Shizuku.addBinderReceivedListenerSticky { AppLog.i("shizuku: running (v${Shizuku.getVersion()})"); bind() }
         Shizuku.addBinderDeadListener { control = null; AppLog.i("shizuku: stopped"); changed() }
         Shizuku.addRequestPermissionResultListener { _, result ->
@@ -64,6 +79,54 @@ object Tether {
             override fun onReceive(c: Context, intent: Intent) = onTetherState(intent)
         }, IntentFilter(TETHER_STATE_CHANGED), Context.RECEIVER_EXPORTED)?.let(::onTetherState)
     }
+
+    /**
+     * Before an update install (it kills the process, and with it our idea of "wanted"): remember that
+     * the laptop wanted the hotspot, so [restoreAfterUpdate] turns it back on in the new process.
+     */
+    fun saveForUpdate() {
+        if (!wanted) return clearRestore()
+        prefs().edit().putLong(KEY_RESTORE_AT, System.currentTimeMillis()).commit()
+        AppLog.i("hotspot restore: saved (wanted=$wanted on=$hotspotOn), restored after the update")
+    }
+
+    /** Install didn't happen (failed/needs a tap): nothing to restore. */
+    fun clearRestore() {
+        if (::app.isInitialized) prefs().edit().remove(KEY_RESTORE_AT).apply()
+    }
+
+    /**
+     * New process after an update (WsConnect.init / BootReceiver MY_PACKAGE_REPLACED, idempotent): hotspot
+     * back on if it was wanted, as soon as the Shizuku helper is bound ([connection]).
+     */
+    fun restoreAfterUpdate() {
+        if (!::app.isInitialized) return
+        val at = prefs().getLong(KEY_RESTORE_AT, 0L).takeIf { it > 0 } ?: return
+        val age = System.currentTimeMillis() - at
+        if (age !in 0..RESTORE_MAX_MS) {
+            AppLog.i("hotspot restore: saved ${age / 1000} s ago, too old: ignored")
+            return clearRestore()
+        }
+        if (wanted) return // already restoring/on
+        AppLog.i("hotspot restore: wanted before the update (${age / 1000} s ago), helper ${if (control != null) "ready" else "not bound yet: waiting"}")
+        if (control != null) {
+            clearRestore()
+            return on()
+        }
+        restorePending = true
+        wanted = true // FLAG_WANTED to the laptop; on() follows in onServiceConnected
+        changed()
+        bind()
+        main.postDelayed({
+            if (!restorePending) return@postDelayed
+            restorePending = false
+            AppLog.i("hotspot restore: no shizuku helper within ${RESTORE_MAX_MS / 60_000} min, gave up")
+            clearRestore()
+            if (control == null) { wanted = false; changed() }
+        }, RESTORE_MAX_MS)
+    }
+
+    private fun prefs() = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
     fun listen(l: () -> Unit) = listeners.add(l)
     fun unlisten(l: () -> Unit) = listeners.remove(l)
@@ -98,6 +161,7 @@ object Tether {
 
     fun off() {
         wanted = false
+        if (restorePending) { restorePending = false; clearRestore(); AppLog.i("hotspot restore: cancelled (off)") }
         changed()
         run("off") { c -> listOf(c.stopHotspot()) }
     }

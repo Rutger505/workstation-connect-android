@@ -174,8 +174,6 @@ class HomeActivity : AppCompatActivity() {
         val s = Updater.status
         val line = when (s) {
             is Updater.Status.Downloading -> "Downloaden… ${s.bytes / 1_048_576}/${r.size / 1_048_576} MB"
-            is Updater.Status.Waiting ->
-                if (s.tether) "Wacht tot hotspot/tethering uit staat" else "Installeert vanzelf zodra de app dicht is"
             is Updater.Status.NeedsTap -> "Gedownload, installeren vraagt een tik"
             is Updater.Status.Installing -> "Installeren…"
             is Updater.Status.Failed -> s.message
@@ -232,7 +230,7 @@ class HomeActivity : AppCompatActivity() {
     @Composable
     private fun UpdateCard(u: Update) = Section("Update beschikbaar (v${u.versionCode})") {
         if (u.line.isNotEmpty()) Line(u.line)
-        Button(::confirmInstall, enabled = u.canInstall) { Text("Nu installeren") }
+        Button(Updater::installNow, enabled = u.canInstall) { Text("Nu installeren") }
     }
 
     @Composable
@@ -362,18 +360,6 @@ class HomeActivity : AppCompatActivity() {
                     ?.permissionExplanationDialog?.show(supportFragmentManager, null)
             }
         }
-    }
-
-    /** The update restarts the app, which drops tethering the laptop may be using: confirm first. */
-    private fun confirmInstall() {
-        if (!Updater.tetherBusy) return Updater.installNow()
-        AlertDialog.Builder(this)
-            .setTitle("Hotspot valt even weg")
-            .setMessage("Tijdens de update herstart de app en gaat de hotspot uit. " +
-                "Je laptop verliest dan even internet. Toch nu installeren?")
-            .setPositiveButton("Installeren") { _, _ -> Updater.installNow() }
-            .setNegativeButton("Later", null)
-            .show()
     }
 
     private fun setKdeBluetooth(on: Boolean) {

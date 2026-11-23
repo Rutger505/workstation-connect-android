@@ -23,6 +23,7 @@ import android.telephony.SignalStrength
 import android.telephony.TelephonyCallback
 import android.telephony.TelephonyManager
 import com.rutger.wsconnect.ui.HomeActivity
+import com.rutger.wsconnect.update.Updater
 import org.kde.kdeconnect.BackgroundService
 import org.kde.kdeconnect.KdeConnect
 import org.kde.kdeconnect.helpers.NotificationHelper
@@ -64,7 +65,15 @@ class LinkService : Service() {
         }
     }
 
-    private val tetherListener: () -> Unit = { main.post { pushState(); checkShizuku() } }
+    private val tetherListener: () -> Unit = { main.post { pushState(); checkShizuku(); armGoneTimeout() } }
+
+    /** Every [TICK_MS] while the service runs (WorkManager's minimum is 15 min): update check. */
+    private val tick = object : Runnable {
+        override fun run() {
+            Updater.checkAsync()
+            main.postDelayed(this, TICK_MS)
+        }
+    }
 
     private val shizukuWarning = Runnable(::showShizukuWarning)
     private var shizukuWarned = false
@@ -123,12 +132,14 @@ class LinkService : Service() {
         Tether.bind()
         checkShizuku()
         if (bt.adapter?.isEnabled == true) startServer() else AppLog.i("bluetooth is off: waiting")
+        main.postDelayed(tick, TICK_MS) // Updater.init already checked at app start
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int) = START_STICKY
 
     override fun onDestroy() {
         running = false
+        main.removeCallbacks(tick)
         main.removeCallbacks(goneTimeout)
         main.removeCallbacks(shizukuWarning)
         cancelShizukuWarning()
@@ -230,6 +241,14 @@ class LinkService : Service() {
         clientsChanged()
         AppLog.i("laptop disconnected ${c.label} (${clients.size} connected)")
         if (running && clients.isEmpty() && Tether.wanted) main.postDelayed(goneTimeout, GONE_TIMEOUT_MS)
+    }
+
+    /**
+     * Main thread only. Wanted without any laptop connected (hotspot restored after an update before the
+     * laptop reconnected): same [GONE_TIMEOUT_MS] as a disconnect.
+     */
+    private fun armGoneTimeout() {
+        if (running && clients.isEmpty() && Tether.wanted && !main.hasCallbacks(goneTimeout)) main.postDelayed(goneTimeout, GONE_TIMEOUT_MS)
     }
 
     private fun closeClients() = clients.forEach { it.close() }
@@ -365,6 +384,7 @@ class LinkService : Service() {
 
     companion object {
         const val GONE_TIMEOUT_MS = 3 * 60_000L
+        const val TICK_MS = 10 * 60_000L
         const val BACKOFF_MIN_MS = 2_000L
         const val BACKOFF_MAX_MS = 60_000L
         const val SHIZUKU_NOTIFICATION_ID = 7702

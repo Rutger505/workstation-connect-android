@@ -6,16 +6,11 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageInstaller
 
-/** PackageInstaller callbacks for [Updater]: install-constraints result and session status. */
+/** PackageInstaller session status for [Updater]. */
 class UpdateReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val version = intent.getIntExtra(EXTRA_VERSION, -1)
         when (intent.action) {
-            ACTION_CONSTRAINTS -> Updater.onConstraints(
-                satisfied = intent.getParcelableExtra(PackageInstaller.EXTRA_INSTALL_CONSTRAINTS_RESULT,
-                    PackageInstaller.InstallConstraintsResult::class.java)?.areAllConstraintsSatisfied() == true,
-                versionCode = version,
-            )
             ACTION_STATUS -> Updater.onInstallResult(
                 code = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE),
                 message = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE),
@@ -27,7 +22,6 @@ class UpdateReceiver : BroadcastReceiver() {
     }
 
     companion object {
-        const val ACTION_CONSTRAINTS = "com.rutger.wsconnect.update.CONSTRAINTS"
         const val ACTION_STATUS = "com.rutger.wsconnect.update.STATUS"
         const val EXTRA_INTERACTIVE = "interactive"
         const val EXTRA_VERSION = "versionCode"

@@ -25,6 +25,7 @@ object WsConnect {
         Clipboard.init(app)
         if (linkEnabled(app)) LinkService.start(app)
         Updater.init(app)
+        Tether.restoreAfterUpdate()
     }
 
     private fun prefs(c: Context) = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -47,7 +48,8 @@ object WsConnect {
  * Restarts the Bluetooth link after a reboot or an update (the process got killed; nobody opens the app).
  * Both broadcasts exempt us from the background FGS-start ban; Application.onCreate already tried
  * (LinkService.start is a no-op when running). Shizuku won't run after a reboot until wireless
- * debugging is started again; after an update it rebinds via Tether.init (new UserService version).
+ * debugging is started again; after an update it rebinds via Tether.init (new UserService version) and
+ * Tether.restoreAfterUpdate turns the hotspot back on if the laptop wanted it before the install.
  */
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
@@ -55,5 +57,6 @@ class BootReceiver : BroadcastReceiver() {
         if (action != Intent.ACTION_BOOT_COMPLETED && action != Intent.ACTION_MY_PACKAGE_REPLACED) return
         AppLog.i("${action.substringAfterLast('.')}: link ${if (WsConnect.linkEnabled(context)) "starting" else "off"}")
         if (WsConnect.linkEnabled(context)) LinkService.start(context)
+        if (action == Intent.ACTION_MY_PACKAGE_REPLACED) Tether.restoreAfterUpdate() // no-op if WsConnect.init did it
     }
 }
