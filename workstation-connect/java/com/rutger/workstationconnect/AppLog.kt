@@ -73,6 +73,10 @@ object AppLog {
         append(LogFormat.lines(now(), level, clean, msg, t))
     }
 
+    /** Like [log], minus the logcat line: for lines that are on logcat already (upstream's, see [KdeLog]). */
+    fun mirror(level: Level, tag: String, msg: String, t: Throwable? = null) =
+        append(LogFormat.lines(now(), level, LogFormat.cleanTag(tag), msg, t))
+
     private fun priority(level: Level) = when (level) {
         Level.D -> Log.DEBUG
         Level.I -> Log.INFO

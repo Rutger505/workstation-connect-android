@@ -96,6 +96,11 @@ class LogUploadLogicTest {
         assertFalse(LogUploadLogic.hasNewLines(listOf(own, ownFail, debug, legacyOwn)))
         assertTrue(LogUploadLogic.hasNewLines(listOf(own, other)))
         assertTrue(LogUploadLogic.hasNewLines(listOf(legacyOwn, legacy)))
+        val kdeInfo = "2026-11-23 22:04:11.000 I kde/KDE/Device: Pair packet"
+        val kdeWarn = "2026-11-23 22:04:11.001 W kde/MdnsDiscovery: Service lost"
+        val kdeErr = "2026-11-23 22:04:11.002 E kde/KDE/LanLinkProvider: Handshake as client failed"
+        assertFalse(LogUploadLogic.hasNewLines(listOf(kdeInfo, kdeWarn)))
+        assertTrue(LogUploadLogic.hasNewLines(listOf(kdeInfo, kdeErr)))
     }
 
     @Test

@@ -24,6 +24,7 @@ plugins {
     alias(libs.plugins.dependencyLicenseReport)
     alias(libs.plugins.compose.compiler)
     alias(libs.plugins.kotlin.serialization)
+    id("workstation-connect.kdelog") // workstation-connect: upstream logs into AppLog
 }
 
 val licenseResDir = "$projectDir/build/dependency-license-res"

@@ -1,4 +1,5 @@
 pluginManagement {
+    includeBuild("workstation-connect/build-logic") // workstation-connect: fork's Gradle plugins
     repositories {
         gradlePluginPortal()
         google()

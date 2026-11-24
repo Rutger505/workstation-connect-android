@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package com.rutger.workstationconnect.logs
 
+import com.rutger.workstationconnect.KdeLogFilter
 import com.rutger.workstationconnect.LogFormat
 import java.time.Instant
 import java.time.ZoneOffset
@@ -48,12 +49,14 @@ object LogUploadLogic {
     /**
      * Worth a periodic upload: any info/warn/error line that isn't our own upload bookkeeping. Debug lines
      * alone don't trigger one (they ride along with the next upload). Old-format lines (no level) count.
+     * Upstream KDE Connect lines ("kde/…", chatty at info/warn) only count at error.
      */
     fun hasNewLines(lines: List<String>) = lines.any {
         val p = LogFormat.parse(it)
         when {
             p.level == null -> !p.msg.startsWith(LEGACY_OWN_PREFIX)
             p.level == LogFormat.Level.D -> false
+            p.tag?.startsWith(KdeLogFilter.PREFIX) == true -> p.level == LogFormat.Level.E
             else -> p.tag != TAG
         }
     }
