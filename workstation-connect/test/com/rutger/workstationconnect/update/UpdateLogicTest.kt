@@ -24,6 +24,19 @@ class UpdateLogicTest {
     }
 
     @Test
+    fun manualBypassesThrottleButWaitsForRunning() {
+        assertEquals(ResumeDecision.Check, UpdateLogic.resumeDecision(115_000, 114_000, false, force = true))
+        assertEquals(ResumeDecision.SkipRunning, UpdateLogic.resumeDecision(115_000, 114_000, true, force = true))
+    }
+
+    @Test
+    fun refreshSpinnerDoneWhenIdleOrCapped() {
+        assertEquals(true, UpdateLogic.refreshDone(false, 0))
+        assertEquals(false, UpdateLogic.refreshDone(true, 9_999))
+        assertEquals(true, UpdateLogic.refreshDone(true, 10_000))
+    }
+
+    @Test
     fun versionLineOutcomes() {
         assertEquals("v12", line(Status.Idle))
         assertEquals("v12 · controleren…", line(Status.Checking))

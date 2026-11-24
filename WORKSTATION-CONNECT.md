@@ -61,7 +61,8 @@ echo "sdk.dir=$ANDROID_HOME" > local.properties
 ## Updates
 
 - `workstation-connect/java/.../update/Updater.kt`: checks `update.json` at app start, on every Home resume (skipped while one runs or <15 s after the last;
-  header shows `v<n> · controleren…/nieuwste versie/v<m> beschikbaar/controle mislukt`),
+  header shows `v<n> · controleren…/nieuwste versie/v<m> beschikbaar/controle mislukt`), on Home pull-to-refresh or a tap on that
+  version line (no throttle, waits for a running check; also refreshes connections, spinner until done, max 10 s),
   every 10 min from `LinkService` (Handler tick) and every 15 min via WorkManager (backup, also with the link off;
   any network incl. mobile data); downloads, verifies sha256 and installs right away via a PackageInstaller
   session: no waiting for tethering, the app being on screen or install constraints (Rutger's wish). Base URL:

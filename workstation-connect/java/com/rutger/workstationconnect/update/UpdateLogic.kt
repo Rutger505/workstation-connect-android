@@ -7,6 +7,8 @@ import com.rutger.workstationconnect.update.Updater.Status
 object UpdateLogic {
     /** Home resume re-checks unless a check finished this recently (rotation/resume spam). */
     const val RESUME_THROTTLE_MS = 15_000L
+    /** Home's refresh spinner (pull/version tap) hides after this even if the check still runs. */
+    const val REFRESH_SPINNER_CAP_MS = 10_000L
 
     sealed interface ResumeDecision {
         data object Check : ResumeDecision
@@ -16,13 +18,18 @@ object UpdateLogic {
 
     /**
      * [nowMs]/[lastFinishedMs] on one monotonic clock (elapsedRealtime), [lastFinishedMs] 0 = never.
-     * [running]: a check is queued or in flight.
+     * [running]: a check is queued or in flight (manual refresh then waits for that one).
+     * [force]: manual refresh (pull-to-refresh, version tap), ignores the throttle.
      */
-    fun resumeDecision(nowMs: Long, lastFinishedMs: Long, running: Boolean): ResumeDecision {
+    fun resumeDecision(nowMs: Long, lastFinishedMs: Long, running: Boolean, force: Boolean = false): ResumeDecision {
         if (running) return ResumeDecision.SkipRunning
+        if (force) return ResumeDecision.Check
         val ago = nowMs - lastFinishedMs
         return if (lastFinishedMs > 0 && ago in 0 until RESUME_THROTTLE_MS) ResumeDecision.SkipRecent(ago) else ResumeDecision.Check
     }
+
+    /** Home's refresh spinner: done once no check is queued/running, or after [REFRESH_SPINNER_CAP_MS]. */
+    fun refreshDone(running: Boolean, elapsedMs: Long): Boolean = !running || elapsedMs >= REFRESH_SPINNER_CAP_MS
 
     /** Home header: installed version + outcome of the last check, e.g. `v12 · v13 beschikbaar`. */
     fun versionLine(installedName: String, installedCode: Int, status: Status): String {

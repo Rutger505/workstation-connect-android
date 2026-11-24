@@ -7,10 +7,12 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
 import android.os.PowerManager
+import android.os.SystemClock
 import android.provider.Settings
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -27,9 +29,11 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -101,6 +105,7 @@ class HomeActivity : AppCompatActivity() {
 
     private val ui = mutableStateOf<Ui?>(null) // set in onCreate: snapshot() needs a context
     private var poll: Job? = null
+    private val refreshing = mutableStateOf(false) // pull-to-refresh / version tap spinner
     private val bump: () -> Unit = { runOnUiThread { ui.value = snapshot() } }
     private val log = AppLog.tag("ui.home")
     private val askPermissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { r ->
@@ -151,6 +156,25 @@ class HomeActivity : AppCompatActivity() {
     override fun onDestroy() {
         log.d("destroy")
         super.onDestroy()
+    }
+
+    /** Pull-to-refresh / version tap: update check now (no throttle) + connections; spinner until the check is done. */
+    private fun refresh(source: String) {
+        if (refreshing.value) return log.d("refresh ($source) skipped: already refreshing")
+        log.d("refresh ($source): update check + connections")
+        refreshing.value = true
+        BackgroundService.ForceRefreshConnections(applicationContext)
+        Updater.checkNow()
+        bump()
+        lifecycleScope.launch {
+            val t0 = SystemClock.elapsedRealtime()
+            while (!UpdateLogic.refreshDone(Updater.checkRunning, SystemClock.elapsedRealtime() - t0)) delay(100)
+            val ms = SystemClock.elapsedRealtime() - t0
+            if (Updater.checkRunning) log.d("refresh ($source): spinner hidden after $ms ms, check still running")
+            else log.d("refresh ($source) done in $ms ms")
+            refreshing.value = false
+            bump()
+        }
     }
 
     // ---- state ----
@@ -208,17 +232,19 @@ class HomeActivity : AppCompatActivity() {
 
     // ---- UI ----
 
+    @OptIn(ExperimentalMaterial3Api::class) // PullToRefreshBox
     @Composable
-    private fun Home(s: Ui) {
+    private fun Home(s: Ui) = PullToRefreshBox(refreshing.value, { refresh("pull") }, Modifier.fillMaxSize().safeDrawingPadding()) {
         Column(
-            Modifier.fillMaxSize().safeDrawingPadding().verticalScroll(rememberScrollState()).padding(16.dp),
+            Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Row(verticalAlignment = Alignment.Bottom) {
                 Text("Workstation Connect", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.width(8.dp))
                 Text(s.version, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(bottom = 4.dp))
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.clickable { refresh("version tap") }.padding(bottom = 4.dp))
             }
             s.update?.let { UpdateCard(it) }
             if (s.setup.isNotEmpty()) Setup(s.setup)

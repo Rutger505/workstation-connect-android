@@ -34,7 +34,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Self-update from the CDN (`update.json` written by workstation-connect/publish; version.json is the retired channel of the old com.rutger.workstationconnect app):
- * - Check: app start, every Home resume (throttled, [UpdateLogic.resumeDecision]), every 10 min from LinkService, [UpdateWorker]
+ * - Check: app start, every Home resume (throttled, [UpdateLogic.resumeDecision]), Home refresh (pull/version tap), every 10 min from LinkService, [UpdateWorker]
  *   every 15 min as backup (any network).
  * - Download + sha256 verify, then install right away via a PackageInstaller session (Rutger: no waiting,
  *   also not for tethering or the app being on screen). The install kills the process: the hotspot is
@@ -77,7 +77,7 @@ object Updater {
     private val log = AppLog.tag("update")
     private lateinit var app: Application
     @Volatile private var lastFinished = 0L // elapsedRealtime, 0 = never
-    private val resumeQueued = AtomicBoolean(false)
+    private val homeQueued = AtomicBoolean(false) // resume/manual check queued, not finished
     @Volatile private var failedInstall: Pair<Int, Long>? = null // versionCode, when
 
     @Volatile var status: Status = Status.Idle; private set
@@ -112,16 +112,23 @@ object Updater {
     }
 
     /** Home resumed: fresh check every time (Home shows the outcome), unless one runs or just finished. */
-    fun onResume() {
-        if (!::app.isInitialized) return log.d("resume check skipped: not initialised")
-        val running = resumeQueued.get() || status is Status.Checking
-        when (val d = UpdateLogic.resumeDecision(SystemClock.elapsedRealtime(), lastFinished, running)) {
-            UpdateLogic.ResumeDecision.SkipRunning -> log.d("resume check skipped: a check is running")
-            is UpdateLogic.ResumeDecision.SkipRecent -> log.d("resume check skipped: last check ${d.agoMs / 1000} s ago")
+    fun onResume() = request("home resumed", force = false)
+
+    /** Manual refresh on Home (pull, version tap): checks now regardless of the throttle; a running check counts. */
+    fun checkNow() = request("manual", force = true)
+
+    /** A Home-requested check is queued or any check is in flight. Home's refresh spinner waits on this. */
+    val checkRunning: Boolean get() = homeQueued.get() || status is Status.Checking
+
+    private fun request(trigger: String, force: Boolean) {
+        if (!::app.isInitialized) return log.d("$trigger check skipped: not initialised")
+        when (val d = UpdateLogic.resumeDecision(SystemClock.elapsedRealtime(), lastFinished, checkRunning, force)) {
+            UpdateLogic.ResumeDecision.SkipRunning -> log.d("$trigger check skipped: a check is running${if (force) ", waiting for it" else ""}")
+            is UpdateLogic.ResumeDecision.SkipRecent -> log.d("$trigger check skipped: last check ${d.agoMs / 1000} s ago")
             UpdateLogic.ResumeDecision.Check -> {
-                if (!resumeQueued.compareAndSet(false, true)) return log.d("resume check skipped: already queued")
-                log.d("resume check queued")
-                worker.execute { try { check("home resumed") } finally { resumeQueued.set(false) } }
+                if (!homeQueued.compareAndSet(false, true)) return log.d("$trigger check skipped: already queued")
+                log.d("$trigger check queued${if (force) " (throttle bypassed)" else ""}")
+                worker.execute { try { check(trigger) } finally { homeQueued.set(false) } }
             }
         }
     }
