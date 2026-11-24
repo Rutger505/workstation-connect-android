@@ -7,9 +7,12 @@ notifications, clipboard, files). Laptop side: [Rutger505/workstation-connect](h
 
 ## Layout
 
-- `workstation-connect/` all our code: `java/com/rutger/workstationconnect` (Kotlin), `aidl/`, `res/`, `workstation-connect.gradle`
+- `workstation-connect/` all our code: `java/com/rutger/workstationconnect` (Kotlin), `aidl/`, `res/`, `workstation-connect.gradle`,
+  `build-logic/` (included Gradle build: plugins that implement AGP API, which apply-from scripts can't see)
 - Upstream files touched (keep it to these, marked `workstation-connect`):
-  - `build.gradle.kts`: last line applies `workstation-connect/workstation-connect.gradle`
+  - `build.gradle.kts`: last line applies `workstation-connect/workstation-connect.gradle`; `plugins {}` applies
+    `workstation-connect.kdelog` (same classloader as AGP)
+  - `settings.gradle.kts`: `pluginManagement` includes `workstation-connect/build-logic`
   - `src/main/AndroidManifest.xml`: launcher moved to `HomeActivity`, one block of our components
   - `src/main/java/org/kde/kdeconnect/KdeConnect.kt`: helper-process guard + `WsConnect.init`
   - `src/main/java/org/kde/kdeconnect/plugins/clipboard/ClipboardListener.kt`: `setText` → `Clipboard.fromLaptop` (history)
@@ -17,7 +20,9 @@ notifications, clipboard, files). Laptop side: [Rutger505/workstation-connect](h
   - `src/main/java/org/kde/kdeconnect/BackgroundService.kt`: `createForegroundNotification` public, returns via `StatusNotification.decorate`
     (one ongoing notification, ID 1, shared with `LinkService`: title KDE Connect status, text laptop link, upstream's actions)
 - No hook, but upstream internals read by reflection: `Device.links` (private) in `workstation-connect/.../Links.kt` (link type on Home,
-  dropping the laptop's LAN link on `CMD_NET_CHANGED`). Check the field still exists after an upstream merge
+  dropping the laptop's LAN link on `CMD_NET_CHANGED`) and `LanLink.socket` (remote address, add-by-IP). Check the fields still exist after an upstream merge
+- Bytecode, no source hook: `build-logic` `WsKdeLogFactory` (AGP ASM instrumentation) rewrites `android.util.Log.{v,d,i,w,e,wtf,println}`
+  calls in `org.kde.kdeconnect.*` to `KdeLog` (same signatures); see "Log upload"
 - Upstream files deleted: laptop→phone mouse/keyboard receivers (`plugins/{mousereceiver,remotekeyboard,remotekeyboardime,inputdevicesreceiver}`,
   `KdeConnectAccessibilityService.kt`, the IME test); `workstation-connect.gradle` strips their manifest services. Unwanted (scrcpy types on the phone);
   deleted, not excluded, because KSP's plugin index ignores source-set excludes
@@ -37,6 +42,15 @@ notifications, clipboard, files). Laptop side: [Rutger505/workstation-connect](h
 - Multiple clients (laptop + desktop): one reader thread + one writer per socket, an I/O error closes only that client.
   Accept failure while Bluetooth is on → server reopened with backoff (2 s doubling to 60 s)
 - Retired commands 2/4: logged + ignored. Last client gone 3 min while wanted → hotspot off
+
+## Pairing (Home)
+
+- `Pairing.kt`: a `PairingCallback` on every device (logs outcome, last failure shown 1 min under the device).
+  Pending request: "Wacht op laptop… (nog N s)" + Annuleren / Opnieuw vragen (re-sends pair; a laptop that already
+  accepted re-prompts). Upstream's `PairingHandler` times out after 30 s → back to Koppelen
+- No laptop visible: IP field. Adds the host to upstream's custom device list (pref `device_list_preference`, same
+  as CustomDevicesActivity; LanLinkProvider watches it), refreshes discovery (again every 10 s), requests pairing
+  once a reachable device has a LAN link to that address, gives up after 30 s
 
 ## Upstream updates
 
@@ -115,6 +129,12 @@ commit, dropped afterwards) with `WSCONNECT_UPDATE_URL=http://10.0.2.2:8765/`; s
   `~/.config/wsconnect-logs/env` (`WSCONNECT_LOGS_ACCESS_KEY=…`, `WSCONNECT_LOGS_SECRET_KEY=…`; `WSCONNECT_LOGS_ENV`
   overrides the path) into `BuildConfig.LOGS_*`. Missing → empty → upload off (one AppLog line, button hidden).
   The build prints only found/MISSING. It does end up in the published APK: write-only, so worst case is junk uploads.
+- **KDE Connect's own lines**: upstream `android.util.Log` calls are redirected at build time (see Layout) to
+  `KdeLog.kt`: logcat unchanged, plus AppLog tag `kde/<tag>` (V/D → D, I → I, W → W, E/wtf → E), no second logcat
+  line. `KdeLogFilter` drops/redacts content (run-command output, Bluetooth multiplexer dumps, identity packet,
+  notification ticker, shared URL, SMS number; recheck new upstream log calls on merges) and rate-limits 30 lines/tag/min.
+  Only `kde/` errors trigger a periodic upload. Not via a logcat reader: with READ_LOGS granted every logcat start
+  needs consent, auto-declined in the background and cached 60 s, which would break the clipboard trick
 - Debug lines for upstream parts (`Diag.kt`, `Clipboard.kt`, `TrackpadActivity`): per paired device reachable/link
   types/plugin state on change, notification filter decisions mirrored from `NotificationsPlugin.sendNotification`
   (keep in sync on upstream merges), clipboard sent/received/skipped-sensitive + READ_LOGS state, trackpad

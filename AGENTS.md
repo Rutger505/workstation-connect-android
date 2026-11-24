@@ -8,7 +8,7 @@ Link protocol: single source in the laptop repo README (Rutger505/workstation-co
 
 - **Git**: commit + push straight to `main`. Exception: upstream merges in a branch `upstream-vX.Y.Z` + PR (steps in WORKSTATION-CONNECT.md). Remote `upstream` = invent.kde.org.
 - Our code only in `workstation-connect/` + the marked upstream hooks listed in WORKSTATION-CONNECT.md. Keep own changes in few separate files/commits so upstream merges stay cheap.
-- Never edit upstream strings: "Workstation Connect" rebrand happens at build time in `workstation-connect.gradle`. apply-from scripts can't see AGP classes: load them reflectively.
+- Never edit upstream strings: "Workstation Connect" rebrand happens at build time in `workstation-connect.gradle`. apply-from scripts can't see AGP classes: load them reflectively; classes implementing AGP API go in `workstation-connect/build-logic` (Gradle 9 rejects them from other classloaders).
 - App id `com.rutger.workstationconnect` (was `com.rutger.wsconnect`: different app to Android), version `v<n>` (versionCode 10000 + n, see WORKSTATION-CONNECT.md), ship the **debug** build (upstream `debug.keystore`). Build of a dirty tree = `-dirty`, publish refuses it: commit first.
 - Publish only via `workstation-connect/publish` on a clean, pushed main (`DRY_RUN=1` to check). Never copy the APK to the CDN by hand: installed apps auto-update from `update.json` (`version.json` = retired channel of the old app id: never write it).
 - Logs key never in git (public repo): read at build time from `~/.config/wsconnect-logs/env`.
@@ -22,9 +22,10 @@ Link protocol: single source in the laptop repo README (Rutger505/workstation-co
 - Shizuku UserService process also runs `App.onCreate`: main-process-only init guarded by process name (`WsConnect.isHelperProcess`).
 - Shizuku needs a wireless-debugging restart after every phone reboot; wireless debugging only works on Wi-Fi. Reboot on the road = no auto hotspot until some Wi-Fi. `LinkService` warns (notification 7702, 15 s grace) while `Tether.ready` is false.
 - Android kills background links: foreground service + battery optimization exemption.
+- Never run `logcat` from the app (e.g. to capture upstream logs; `KdeLog` redirect instead): with READ_LOGS each start needs consent, background = declined + cached 60 s → clipboard trick breaks.
 - Background clipboard reads (Android 10+): READ_CLIPBOARD appop doesn't help; upstream's READ_LOGS trick (granted via Shizuku shell, plus SYSTEM_ALERT_WINDOW). Android 13+ asks per logcat start: accepted by Rutger, no workaround. Password filter = `ClipDescription.EXTRA_IS_SENSITIVE`.
 - Silent update: never use `setAppNotInteractingRequired` (KDE Connect always has traffic) or `setAppNotForegroundRequired` (counts the FGS). Shizuku rebind after MY_PACKAGE_REPLACED untested on a Pixel.
 - Play Protect blocks browser-installed APKs with notification-listener/SMS perms (Rutger turned scanning off); `adb install` is the clean route.
-- Upstream internals read by reflection (`Device.links` in `Links.kt`) and mirrored logic (`NotificationsPlugin.sendNotification` in `Diag.kt`): recheck on every upstream merge.
+- Upstream internals read by reflection (`Device.links`, `LanLink.socket` in `Links.kt`) and mirrored logic (`NotificationsPlugin.sendNotification` in `Diag.kt`): recheck on every upstream merge.
 - Trackpad: volume keys = mouse buttons only while it's in the foreground. Sideways: 3-finger tap then swipe = "up" (pref `wsconnect_trackpad`/`up_edge`, activity portrait-locked). adb can't do 3 fingers: test by writing the pref.
 - Phone side verified on Pixel 9 (Android 17, sdk 37): hotspot on ~2.7 s, off <0.5 s.
