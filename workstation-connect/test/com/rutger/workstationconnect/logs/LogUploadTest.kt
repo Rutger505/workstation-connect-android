@@ -86,11 +86,24 @@ class LogUploadLogicTest {
 
     @Test
     fun newLinesIgnoreOwnUploadLines() {
-        val own = "2026-11-23 22:04:09.123 log upload: phone/x/2026-11-23/210409-periodic.log (12 bytes)"
-        val other = "2026-11-23 22:04:10.000 laptop connected"
+        val own = "2026-11-23 22:04:09.123 I upload: periodic: phone/x/2026-11-23/210409-periodic.log (12 bytes)"
+        val ownFail = "2026-11-23 22:04:09.124 W upload: periodic failed, retried with the next trigger"
+        val debug = "2026-11-23 22:04:09.125 D link: frame sent"
+        val other = "2026-11-23 22:04:10.000 I link: laptop connected"
+        val legacyOwn = "2026-11-23 22:04:09.123 log upload: phone/x/2026-11-23/210409-periodic.log (12 bytes)"
+        val legacy = "2026-11-23 22:04:10.000 laptop connected"
         assertFalse(LogUploadLogic.hasNewLines(emptyList()))
-        assertFalse(LogUploadLogic.hasNewLines(listOf(own)))
+        assertFalse(LogUploadLogic.hasNewLines(listOf(own, ownFail, debug, legacyOwn)))
         assertTrue(LogUploadLogic.hasNewLines(listOf(own, other)))
+        assertTrue(LogUploadLogic.hasNewLines(listOf(legacyOwn, legacy)))
+    }
+
+    @Test
+    fun s3ErrorKeepsOnlyCodeAndMessage() {
+        val body = "<Error><Code>SignatureDoesNotMatch</Code><Message>nope</Message>" +
+            "<AWSAccessKeyId>AKIDSECRET</AWSAccessKeyId><StringToSign>x</StringToSign></Error>"
+        assertEquals("SignatureDoesNotMatch: nope", LogUploadLogic.s3Error(body))
+        assertEquals("no S3 error code", LogUploadLogic.s3Error("<html>AKIDSECRET</html>"))
     }
 
     @Test

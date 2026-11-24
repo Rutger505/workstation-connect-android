@@ -45,6 +45,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 @SuppressLint("MissingPermission") // HomeActivity requests BLUETOOTH_CONNECT before enabling the link
 class LinkService : Service() {
 
+    private val log = AppLog.tag("link")
     private val main = Handler(Looper.getMainLooper())
     private lateinit var bt: BluetoothManager
 
@@ -62,9 +63,9 @@ class LinkService : Service() {
 
     private val goneTimeout = Runnable {
         if (Tether.wanted && clients.isEmpty()) {
-            AppLog.i("laptop gone ${GONE_TIMEOUT_MS / 60000} min: tethering off")
-            Tether.off()
-        }
+            log.i("laptop gone ${GONE_TIMEOUT_MS / 60000} min: tethering off")
+            Tether.off("laptop gone")
+        } else log.d("gone timeout: nothing to do (wanted=${Tether.wanted}, ${clients.size} connected)")
     }
 
     private val tetherListener: () -> Unit = { main.post { pushState(); checkShizuku(); armGoneTimeout() } }
@@ -94,12 +95,13 @@ class LinkService : Service() {
                     when (intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, -1)) {
                         // Always reopen on ON: after a stack restart without TURNING_OFF the old
                         // server socket may be dead but non-null.
-                        BluetoothAdapter.STATE_ON -> { AppLog.i("bluetooth on: rfcomm server (re)start"); stopServer(); startServer() }
+                        BluetoothAdapter.STATE_ON -> { log.i("bluetooth on: rfcomm server (re)start"); stopServer(); startServer() }
                         BluetoothAdapter.STATE_TURNING_OFF, BluetoothAdapter.STATE_OFF -> {
-                            if (server != null || clients.isNotEmpty()) AppLog.i("bluetooth off: rfcomm server stopped")
+                            if (server != null || clients.isNotEmpty()) log.i("bluetooth off: rfcomm server stopped, ${clients.size} client(s) closed")
                             stopServer()
-                            closeClients()
+                            closeClients("bluetooth off")
                         }
+                        else -> log.d("bluetooth state ${intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, -1)}: ignored")
                     }
             }
         }
@@ -116,6 +118,7 @@ class LinkService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        log.i("service create")
         running = true
         startForeground(StatusNotification.ID, StatusNotification.build(this), ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
         // BackgroundService refreshes on device changes itself; cover the time it isn't running
@@ -130,27 +133,32 @@ class LinkService : Service() {
         }, RECEIVER_EXPORTED)
         runCatching {
             getSystemService(TelephonyManager::class.java).registerTelephonyCallback(mainExecutor, signalCallback)
-        }.onFailure { AppLog.i("signal listener: $it") }
+        }.onFailure { log.w("signal listener not registered, signal stays unknown", it) }
         Tether.listen(tetherListener)
         Tether.bind()
         checkShizuku()
-        if (bt.adapter?.isEnabled == true) startServer() else AppLog.i("bluetooth is off: waiting")
+        if (bt.adapter?.isEnabled == true) startServer() else log.i("bluetooth is off: waiting")
         main.postDelayed(tick, TICK_MS) // Updater.init already checked at app start
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int) = START_STICKY
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        log.d("start command (startId $startId${if (intent == null) ", sticky restart" else ""})")
+        return START_STICKY
+    }
 
     override fun onDestroy() {
+        log.i("service destroy (${clients.size} client(s) closed)")
         running = false
         main.removeCallbacks(tick)
         main.removeCallbacks(goneTimeout)
         main.removeCallbacks(shizukuWarning)
         cancelShizukuWarning()
         Tether.unlisten(tetherListener)
-        runCatching { unregisterReceiver(receiver) }
+        runCatching { unregisterReceiver(receiver) }.onFailure { log.w("unregister receiver", it) }
         runCatching { getSystemService(TelephonyManager::class.java).unregisterTelephonyCallback(signalCallback) }
+            .onFailure { log.d("unregister signal listener: ${it.javaClass.simpleName}") } // never registered
         stopServer()
-        closeClients()
+        closeClients("service stopped")
         clientLabels = emptyList()
         KdeConnect.getInstance().removeDeviceListChangedCallback(DEVICES_CALLBACK)
         // Shared notification stays while BackgroundService holds it: show the link as off. Without it the
@@ -164,18 +172,18 @@ class LinkService : Service() {
     /** Main thread only. Opens the SDP record + server socket and starts the accept loop. */
     private fun startServer() {
         main.removeCallbacks(restart)
-        if (server != null || !running) return
-        if (bt.adapter?.isEnabled != true) return AppLog.i("bluetooth is off: waiting")
+        if (server != null || !running) return log.d("start server: skipped (${if (!running) "service stopped" else "already listening"})")
+        if (bt.adapter?.isEnabled != true) return log.i("bluetooth is off: waiting")
         val s = try {
             bt.adapter.listenUsingRfcommWithServiceRecord(SDP_NAME, Proto.SERVICE)
         } catch (e: Exception) { // IOException, or SecurityException without BLUETOOTH_CONNECT
-            AppLog.i("rfcomm listen failed: $e")
+            log.e("rfcomm listen failed", e)
             return scheduleRestart()
         }
         server = s
         listening = true
         val gen = generation
-        AppLog.i("rfcomm server listening")
+        log.i("rfcomm server listening (generation $gen)")
         Thread({ acceptLoop(s, gen) }, "wsconnect-accept").start()
     }
 
@@ -185,8 +193,8 @@ class LinkService : Service() {
                 s.accept()
             } catch (e: IOException) {
                 main.post {
-                    if (gen != generation) return@post // stopped on purpose
-                    AppLog.i("rfcomm accept failed: ${e.message}")
+                    if (gen != generation) return@post log.d("accept loop $gen ended: server stopped on purpose")
+                    log.w("rfcomm accept failed", e)
                     stopServer()
                     scheduleRestart()
                 }
@@ -198,8 +206,8 @@ class LinkService : Service() {
 
     /** Main thread only. Retries [startServer] with exponential backoff while Bluetooth is on. */
     private fun scheduleRestart() {
-        if (!running || bt.adapter?.isEnabled != true) return
-        AppLog.i("rfcomm server restart in ${backoffMs / 1000} s")
+        if (!running || bt.adapter?.isEnabled != true) return log.d("server restart: skipped (running=$running, bluetooth off)")
+        log.i("rfcomm server restart in ${backoffMs / 1000} s")
         main.removeCallbacks(restart)
         main.postDelayed(restart, backoffMs)
         backoffMs = (backoffMs * 2).coerceAtMost(BACKOFF_MAX_MS)
@@ -209,7 +217,7 @@ class LinkService : Service() {
     private fun stopServer() {
         main.removeCallbacks(restart)
         generation++
-        runCatching { server?.close() }
+        server?.let { s -> runCatching { s.close() }.onFailure { log.d("server socket close: $it") } }
         server = null
         listening = false
     }
@@ -220,12 +228,13 @@ class LinkService : Service() {
     private fun accepted(socket: BluetoothSocket, gen: Int) {
         val device = socket.remoteDevice
         if (gen != generation || !running) {
-            runCatching { socket.close() }
+            log.d("accepted ${device.address} from a stopped server: closed")
+            runCatching { socket.close() }.onFailure { log.d("socket close: $it") }
             return
         }
         if (device.bondState != BluetoothDevice.BOND_BONDED) { // secure socket: shouldn't happen
-            AppLog.i("rfcomm: rejected unbonded ${device.address}")
-            runCatching { socket.close() }
+            log.w("rfcomm: rejected unbonded ${device.address}")
+            runCatching { socket.close() }.onFailure { log.d("socket close: $it") }
             return
         }
         backoffMs = BACKOFF_MIN_MS
@@ -233,9 +242,11 @@ class LinkService : Service() {
         clients.add(c)
         clientsChanged()
         main.removeCallbacks(goneTimeout)
-        AppLog.i("laptop connected ${c.label} (${clients.size} connected)")
+        log.i("laptop connected ${c.label} (${clients.size} connected)")
         LogUpload.trigger(Reason.LINK_CONNECT)
-        c.send(stateBytes())
+        val state = stateBytes()
+        log.d("state → ${c.label}: ${Proto.stateString(state)} (initial)")
+        c.send(state)
         c.startReader()
     }
 
@@ -243,9 +254,13 @@ class LinkService : Service() {
     private fun removed(c: Client) {
         if (!clients.remove(c)) return
         clientsChanged()
-        AppLog.i("laptop disconnected ${c.label} (${clients.size} connected)")
+        val secs = (System.currentTimeMillis() - c.since) / 1000
+        log.i("laptop disconnected ${c.label}: ${c.reason} after ${secs} s, ${c.received} command(s) (${clients.size} connected)")
         LogUpload.trigger(Reason.LINK_LOST)
-        if (running && clients.isEmpty() && Tether.wanted) main.postDelayed(goneTimeout, GONE_TIMEOUT_MS)
+        if (running && clients.isEmpty() && Tether.wanted) {
+            log.i("last laptop gone while hotspot wanted: off in ${GONE_TIMEOUT_MS / 60000} min unless one reconnects")
+            main.postDelayed(goneTimeout, GONE_TIMEOUT_MS)
+        }
     }
 
     /**
@@ -253,21 +268,28 @@ class LinkService : Service() {
      * laptop reconnected): same [GONE_TIMEOUT_MS] as a disconnect.
      */
     private fun armGoneTimeout() {
-        if (running && clients.isEmpty() && Tether.wanted && !main.hasCallbacks(goneTimeout)) main.postDelayed(goneTimeout, GONE_TIMEOUT_MS)
+        if (running && clients.isEmpty() && Tether.wanted && !main.hasCallbacks(goneTimeout)) {
+            log.i("hotspot wanted without a laptop: off in ${GONE_TIMEOUT_MS / 60000} min unless one connects")
+            main.postDelayed(goneTimeout, GONE_TIMEOUT_MS)
+        }
     }
 
-    private fun closeClients() = clients.forEach { it.close() }
+    private fun closeClients(reason: String) = clients.forEach { it.close(reason) }
 
     /** Main thread only. */
     private fun command(c: Client, cmd: Byte) {
+        if (cmd != Proto.CMD_PING) c.received++
         when (cmd) {
-            Proto.CMD_ON -> { AppLog.i("laptop: on (${c.label})"); Tether.on() }
-            Proto.CMD_OFF -> { AppLog.i("laptop: off (${c.label})"); Tether.off() }
-            Proto.CMD_NET_CHANGED -> { AppLog.i("laptop: net changed (${c.label})"); Links.dropLaptopLan(this) }
-            Proto.CMD_PING -> c.send(stateBytes()) // the laptop's liveness check: not logged
+            Proto.CMD_ON -> { log.i("laptop: on (${c.label})"); Tether.on("laptop") }
+            Proto.CMD_OFF -> { log.i("laptop: off (${c.label})"); Tether.off("laptop") }
+            Proto.CMD_NET_CHANGED -> { log.i("laptop: net changed (${c.label})"); Links.dropLaptopLan(this) }
+            Proto.CMD_PING -> { // the laptop's liveness check: only the first per client is logged
+                if (!c.pinged) { c.pinged = true; log.d("first ping from ${c.label}") }
+                c.send(stateBytes())
+            }
             Proto.CMD_RETIRED_BT_OFF, Proto.CMD_RETIRED_ON_BT ->
-                AppLog.i("laptop: retired command $cmd ignored (${c.label})")
-            else -> AppLog.i("laptop: unknown command $cmd ignored (${c.label})")
+                log.w("laptop: ${Proto.cmdName(cmd)} command ignored (${c.label}, old laptop app?)")
+            else -> log.w("laptop: ${Proto.cmdName(cmd)} command ignored (${c.label}, newer laptop app?)")
         }
     }
 
@@ -284,6 +306,10 @@ class LinkService : Service() {
      */
     private inner class Client(val socket: BluetoothSocket, val label: String) {
         private val closed = AtomicBoolean(false)
+        val since = System.currentTimeMillis()
+        @Volatile var reason = "closed"
+        var received = 0 // main thread
+        var pinged = false // main thread
         private val writer: ExecutorService = Executors.newSingleThreadExecutor { Thread(it, "wsconnect-write") }
 
         fun startReader() = Thread({ readLoop() }, "wsconnect-read").start()
@@ -296,12 +322,14 @@ class LinkService : Service() {
                     if (len == 0) continue // keepalive
                     val payload = ByteArray(len).also(input::readFully)
                     // Commands are 1 byte; a longer frame from a newer laptop: act on the first byte.
-                    main.post { if (!closed.get()) command(this, payload[0]) }
+                    if (len > 1) log.d("frame of $len bytes from $label: acting on the first byte")
+                    if (payload[0] != Proto.CMD_PING) log.d("frame ← $label: ${Proto.cmdName(payload[0])}")
+                    main.post { if (!closed.get()) command(this, payload[0]) else log.d("command after close dropped ($label)") }
                 }
             } catch (e: IOException) {
-                if (!closed.get()) AppLog.i("rfcomm read ended (${label}): ${e.message}")
+                if (!closed.get()) return close("read ended: ${e.message}")
             }
-            close()
+            close("closed")
         }
 
         fun send(payload: ByteArray) {
@@ -315,17 +343,18 @@ class LinkService : Service() {
                             socket.outputStream.flush()
                         }
                     } catch (e: IOException) {
-                        if (!closed.get()) AppLog.i("rfcomm write failed (${label}): ${e.message}")
-                        close()
+                        if (!closed.get()) log.w("rfcomm write failed ($label): ${e.message}")
+                        close("write failed: ${e.message}")
                     }
                 }
-            } // RejectedExecutionException: already closed
+            }.onFailure { log.d("send to $label after close dropped: ${it.javaClass.simpleName}") } // RejectedExecutionException
         }
 
-        /** Any thread, idempotent. */
-        fun close() {
+        /** Any thread, idempotent. First [why] wins (logged by [removed]). */
+        fun close(why: String) {
             if (!closed.compareAndSet(false, true)) return
-            runCatching { socket.close() }
+            reason = why
+            runCatching { socket.close() }.onFailure { log.d("socket close ($label): $it") }
             writer.shutdown()
             main.post { removed(this) }
         }
@@ -346,14 +375,21 @@ class LinkService : Service() {
     private fun pushState() {
         val value = stateBytes()
         if (value.contentEquals(lastSent)) return
+        val old = lastSent
         lastSent = value
+        // battery-only changes: no line (every percent would be one)
+        if (old == null || old[0] != value[0] || old[2] != value[2]) log.d("state → ${clients.size} client(s): ${Proto.stateString(value)}")
         clients.forEach { it.send(value) }
     }
 
     /** Main thread only. Warns when the auto hotspot can't work; debounced so app start doesn't flash it. */
     private fun checkShizuku() {
         main.removeCallbacks(shizukuWarning)
-        if (Tether.ready) cancelShizukuWarning() else main.postDelayed(shizukuWarning, SHIZUKU_GRACE_MS)
+        if (Tether.ready) cancelShizukuWarning()
+        else {
+            if (!shizukuWarned) log.d("shizuku helper not ready: warning in ${SHIZUKU_GRACE_MS / 1000} s unless it binds")
+            main.postDelayed(shizukuWarning, SHIZUKU_GRACE_MS)
+        }
     }
 
     private fun showShizukuWarning() {
@@ -363,7 +399,7 @@ class LinkService : Service() {
             !Tether.shizukuAllowed -> "Workstation Connect heeft geen Shizuku-toestemming."
             else -> "Shizuku-helper niet verbonden. Open de app."
         }
-        if (!shizukuWarned) AppLog.i("shizuku warning: $text")
+        if (!shizukuWarned) log.w("shizuku warning shown: $text")
         shizukuWarned = true
         val nm = getSystemService(NotificationManager::class.java)
         // Not running: Shizuku's own app is where it gets started. Otherwise our home screen fixes it.
@@ -382,7 +418,7 @@ class LinkService : Service() {
     }
 
     private fun cancelShizukuWarning() {
-        if (shizukuWarned) AppLog.i("shizuku warning cleared")
+        if (shizukuWarned) log.i("shizuku warning cleared")
         shizukuWarned = false
         getSystemService(NotificationManager::class.java).cancel(SHIZUKU_NOTIFICATION_ID)
     }
@@ -411,9 +447,13 @@ class LinkService : Service() {
         fun start(c: Context) {
             if (running) return
             runCatching { c.startForegroundService(Intent(c, LinkService::class.java)) }
-                .onFailure { AppLog.i("link service start refused: $it") }
+                .onSuccess { AppLog.d("link", "service start requested") }
+                .onFailure { AppLog.e("link", "service start refused", it) }
         }
 
-        fun stop(c: Context) = c.stopService(Intent(c, LinkService::class.java))
+        fun stop(c: Context) {
+            AppLog.i("link", "service stop requested (running=$running)")
+            c.stopService(Intent(c, LinkService::class.java))
+        }
     }
 }

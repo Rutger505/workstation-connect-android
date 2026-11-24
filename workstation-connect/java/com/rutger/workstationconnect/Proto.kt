@@ -32,4 +32,24 @@ object Proto {
     const val FLAG_HOTSPOT = 4      // Wi-Fi hotspot tethered
     const val FLAG_WANTED = 8       // laptop asked for "on" and hasn't said "off"
     const val FLAG_ERROR = 16       // last tether command failed (details in app log)
+
+    /** Command byte → name, for logs. */
+    fun cmdName(cmd: Byte): String = when (cmd) {
+        CMD_OFF -> "off"
+        CMD_ON -> "on"
+        CMD_NET_CHANGED -> "net-changed"
+        CMD_PING -> "ping"
+        CMD_RETIRED_BT_OFF, CMD_RETIRED_ON_BT -> "retired($cmd)"
+        else -> "unknown($cmd)"
+    }
+
+    /** State frame → "flags=shizuku,hotspot battery=80 signal=3 v5", for logs. */
+    fun stateString(state: ByteArray): String {
+        if (state.size < 4) return "short state frame (${state.size} bytes)"
+        val f = state[0].toInt() and 0xff
+        val flags = listOf(FLAG_SHIZUKU to "shizuku", FLAG_HOTSPOT to "hotspot", FLAG_WANTED to "wanted", FLAG_ERROR to "error")
+            .filter { f and it.first != 0 }.joinToString(",") { it.second }.ifEmpty { "none" }
+        val signal = state[2].toInt() and 0xff
+        return "flags=$flags battery=${state[1].toInt() and 0xff} signal=${if (signal == 255) "?" else signal} v${state[3]}"
+    }
 }

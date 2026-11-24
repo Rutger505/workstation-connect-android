@@ -37,13 +37,15 @@ object LogUpload {
     private val pending = mutableListOf<Reason>() // guarded by itself
     private var scheduled: ScheduledFuture<*>? = null // guarded by pending
     private lateinit var app: Context
+    private val log = AppLog.tag(LogUploadLogic.TAG)
 
     /** Main process, once (WsConnect.init, after AppLog.init). */
     fun init(context: Context) {
         app = context.applicationContext
         installCrashHandler()
-        if (!enabled) return AppLog.i("log upload: off (no key at build time)")
+        if (!enabled) return log.w("off (no key at build time)")
         if (prefs().getBoolean(KEY_CRASHED, false)) {
+            log.i("crash flagged by the previous process: crash upload")
             prefs().edit().remove(KEY_CRASHED).apply()
             trigger(Reason.CRASH)
         }
@@ -88,7 +90,7 @@ object LogUpload {
             synchronized(pending) { pending.removeAll(reasons) }
         }
     } catch (e: Exception) {
-        AppLog.i("${LogUploadLogic.OWN_PREFIX}${reasons.joinToString { it.key }} failed: ${e.toString().replace(Regex("\\s+"), " ")}")
+        log.w("${reasons.joinToString { it.key }} failed, retried with the next trigger", e)
         synchronized(pending) { reasons.forEach { if (it != Reason.MANUAL) LogUploadLogic.merge(pending, it) } } // next trigger retries
         if (rethrow) throw e
         null
@@ -98,7 +100,7 @@ object LogUpload {
         val all = AppLog.fullLines()
         val marker = prefs().getString(KEY_MARKER, null)
         val (lines, found) = LogUploadLogic.since(all, marker)
-        if (reasons == listOf(Reason.PERIODIC) && !LogUploadLogic.hasNewLines(lines)) return null
+        if (reasons == listOf(Reason.PERIODIC) && !LogUploadLogic.hasNewLines(lines)) return null.also { log.d("periodic: nothing new, skipped") }
         val now = System.currentTimeMillis()
         val head = buildString {
             append("device: ${Build.MANUFACTURER} ${Build.MODEL} (${Build.DEVICE})\n")
@@ -116,7 +118,8 @@ object LogUpload {
         val key = LogUploadLogic.objectKey(Build.MODEL, reasons.first(), now)
         put(key, body, now)
         all.lastOrNull()?.let { prefs().edit().putString(KEY_MARKER, it).apply() }
-        AppLog.i("${LogUploadLogic.OWN_PREFIX}$key (${body.size} bytes)")
+        val ms = System.currentTimeMillis() - now
+        log.i("${reasons.joinToString { it.key }}: $key (${lines.size} lines, ${body.size} bytes, $ms ms${if (found) "" else ", marker gone: whole file"})")
         return key
     }
 
@@ -146,7 +149,7 @@ object LogUpload {
             val code = c.responseCode
             if (code !in 200..299) {
                 val text = runCatching { c.errorStream?.bufferedReader()?.use { it.readText() } }.getOrNull().orEmpty()
-                error("PUT $key: HTTP $code: ${text.take(300)}")
+                error("PUT $key: HTTP $code: ${LogUploadLogic.s3Error(text)}")
             }
         } finally {
             c.disconnect()
@@ -159,12 +162,8 @@ object LogUpload {
         Thread.setDefaultUncaughtExceptionHandler { t, e ->
             runCatching {
                 prefs().edit().putBoolean(KEY_CRASHED, true).commit()
-                val trace = generateSequence(e) { it.cause }.take(5).flatMapIndexed { i, x ->
-                    listOf((if (i == 0) "CRASH in thread ${t.name}: " else "  caused by: ") + x) +
-                        x.stackTrace.take(25).map { "    at $it" }
-                }.toList()
-                AppLog.crash(trace)
-            }
+                AppLog.crash(t.name, e)
+            }.onFailure { android.util.Log.e("wsc.upload", "crash handler failed", it) }
             previous?.uncaughtException(t, e)
         }
     }

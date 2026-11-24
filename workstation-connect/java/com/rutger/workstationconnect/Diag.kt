@@ -27,6 +27,8 @@ import java.util.concurrent.ConcurrentHashMap
  */
 object Diag {
     private const val CALLBACK = "wsconnect-diag"
+    private val log = AppLog.tag("kde")
+    private val notifLog = AppLog.tag("notif")
     private lateinit var app: Context
     private val deviceState = ConcurrentHashMap<String, String>()
     private val listening = ConcurrentHashMap<String, Device>()
@@ -48,7 +50,7 @@ object Diag {
             }
             deviceChanged(d)
         }
-    }.onFailure { AppLog.i("diag: devices: $it") }
+    }.onFailure { log.w("device state lookup failed", it) }
 
     private fun deviceChanged(d: Device) {
         val links = Links.of(d).joinToString("+") {
@@ -56,7 +58,7 @@ object Diag {
         }.ifEmpty { "none" }
         val state = "reachable=${d.isReachable} links=$links plugins: notifications=${plugin(d, NotificationsPlugin::class.java)} " +
             "mousepad=${plugin(d, MousePadPlugin::class.java)} clipboard=${plugin(d, ClipboardPlugin::class.java)}"
-        if (deviceState.put(d.deviceId, state) != state) AppLog.i("kde ${d.name}: $state")
+        if (deviceState.put(d.deviceId, state) != state) log.i("${d.name}: $state")
         if (d.loadedPlugins.containsKey(Plugin.getPluginKey(NotificationsPlugin::class.java))) attachNotifications()
     }
 
@@ -66,7 +68,7 @@ object Diag {
         return when {
             d.pluginsWithoutPermissions.containsKey(key) -> "no-permission"
             d.loadedPlugins.containsKey(key) -> "on"
-            !runCatching { d.isPluginEnabled(key) }.getOrDefault(false) -> "off"
+            !runCatching { d.isPluginEnabled(key) }.onFailure { log.d("isPluginEnabled($key): $it") }.getOrDefault(false) -> "off"
             else -> "not-loaded"
         }
     }
@@ -75,20 +77,25 @@ object Diag {
 
     /** Our listener on upstream's receiver; once per receiver instance (a rebind creates a new one). */
     private fun attachNotifications() {
-        if (notifService != null || !NotificationReceiver.hasReadNotificationsPermission(app)) return
+        if (notifService != null) return
+        if (!NotificationReceiver.hasReadNotificationsPermission(app)) {
+            if (!noNotifPermissionLogged) { noNotifPermissionLogged = true; notifLog.w("no notification access: diag listener not attached") }
+            return
+        }
         runCatching {
             NotificationReceiver.RunCommand(app) { service ->
                 if (notifService === service) return@RunCommand
                 notifService = service
                 service.addListener(notifListener)
-                AppLog.i("notifications: diag listener attached")
+                notifLog.i("diag listener attached")
             }
-        }.onFailure { AppLog.i("notifications: diag listener: $it") }
+        }.onFailure { notifLog.w("diag listener attach failed", it) }
     }
+    @Volatile private var noNotifPermissionLogged = false
 
     private val notifListener = object : NotificationReceiver.NotificationListener {
         override fun onNotificationPosted(statusBarNotification: StatusBarNotification) {
-            runCatching { posted(statusBarNotification) }
+            runCatching { posted(statusBarNotification) }.onFailure { notifLog.w("diag for ${statusBarNotification.packageName} failed", it) }
         }
         override fun onNotificationRemoved(statusBarNotification: StatusBarNotification) {}
         override fun onListenerConnected(service: NotificationReceiver) {}
@@ -107,7 +114,7 @@ object Diag {
             Notification.CATEGORY_TRANSPORT == n.category -> "media controls"
             !AppDatabase.getInstance(app).isEnabled(pkg) -> "blocked by filter"
             pkg == "com.android.systemui" && (sbn.tag == "low_battery" || n.channelId == "MediaOngoingActivity") -> "systemui hack"
-            runCatching { app.packageManager.isPackageSuspended(pkg) }.getOrDefault(false) -> "app suspended"
+            runCatching { app.packageManager.isPackageSuspended(pkg) }.onFailure { notifLog.d("isPackageSuspended($pkg): $it") }.getOrDefault(false) -> "app suspended"
             else -> null
         }
         val laptop = WsConnect.laptop(app)
@@ -125,6 +132,6 @@ object Diag {
         val last = lastNotifLog[key]
         if (last != null && now - last < window) return
         lastNotifLog[key] = now
-        AppLog.i("notif $pkg: $line")
+        notifLog.d("$pkg: $line")
     }
 }

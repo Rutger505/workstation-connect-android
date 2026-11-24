@@ -1,5 +1,7 @@
 package com.rutger.workstationconnect.ui
 
+import com.rutger.workstationconnect.AppLog
+
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
@@ -23,7 +25,8 @@ object HomeRedirect {
             i.getBooleanExtra(EXTRA_ADVANCED, false) ||
             i.hasExtra(MainActivity.PAIR_REQUEST_STATUS) ||
             i.flags and Intent.FLAG_ACTIVITY_CLEAR_TOP != 0 // "up" from an upstream settings screen
-        if (keep) return false
+        if (keep) return false.also { AppLog.d("ui", "MainActivity kept (advanced/pairing/recreated/up)") }
+        AppLog.d("ui", "MainActivity → home (action ${i.action})")
         a.startActivity(Intent(a, HomeActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP))
         a.finish()
         return true

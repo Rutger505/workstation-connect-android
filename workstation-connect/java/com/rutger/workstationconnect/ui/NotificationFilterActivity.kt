@@ -55,6 +55,7 @@ class NotificationFilterActivity : AppCompatActivity() {
 
     data class App(val pkg: String, val name: String, val icon: Bitmap)
 
+    private val log = AppLog.tag("ui.notif-filter")
     private lateinit var db: AppDatabase
     private val apps = mutableStateOf<List<App>?>(null)
     private val enabled = mutableStateMapOf<String, Boolean>()
@@ -63,11 +64,14 @@ class NotificationFilterActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        log.d("open")
         db = AppDatabase.getInstance(this)
         lifecycleScope.launch {
+            val t0 = System.currentTimeMillis()
             val (list, states) = withContext(Dispatchers.IO) { loadApps().let { l -> l to l.associate { it.pkg to db.isEnabled(it.pkg) } } }
             enabled.putAll(states)
             apps.value = list
+            log.d("${list.size} apps loaded (${states.count { it.value }} on) in ${System.currentTimeMillis() - t0} ms")
         }
         setContent {
             KdeTheme(this) {
@@ -82,7 +86,7 @@ class NotificationFilterActivity : AppCompatActivity() {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Nieuwe apps standaard aan", Modifier.weight(1f))
             var all by mutableBool(db.allEnabled)
-            Switch(all, { db.allEnabled = it; all = it; AppLog.i("notif filter: all apps ${if (it) "on" else "off"}") })
+            Switch(all, { db.allEnabled = it; all = it; log.i("new apps default ${if (it) "on" else "off"}") })
         }
         OutlinedTextField(query.value, { query.value = it }, Modifier.fillMaxWidth(), label = { Text("Zoeken") }, singleLine = true)
         val list = apps.value ?: return@Column Text("Apps laden…")
@@ -95,7 +99,7 @@ class NotificationFilterActivity : AppCompatActivity() {
                         Image(app.icon.asImageBitmap(), null, Modifier.size(36.dp))
                         Spacer(Modifier.width(12.dp))
                         Text(app.name, Modifier.weight(1f))
-                        Switch(enabled[app.pkg] ?: false, { db.setEnabled(app.pkg, it); enabled[app.pkg] = it; AppLog.i("notif filter: ${app.pkg} ${if (it) "on" else "off"}") })
+                        Switch(enabled[app.pkg] ?: false, { db.setEnabled(app.pkg, it); enabled[app.pkg] = it; log.i("${app.pkg} ${if (it) "on" else "off"}") })
                     }
                     if (expanded.value == app.pkg) Privacy(app.pkg)
                 }
@@ -111,7 +115,7 @@ class NotificationFilterActivity : AppCompatActivity() {
         ).forEach { (opt, label) ->
             var on by mutableBool(db.getPrivacy(pkg, opt))
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Checkbox(on, { db.setPrivacy(pkg, opt, it); on = it; AppLog.i("notif filter: $pkg ${opt.name.lowercase()} ${if (it) "on" else "off"}") })
+                Checkbox(on, { db.setPrivacy(pkg, opt, it); on = it; log.i("$pkg ${opt.name.lowercase()} ${if (it) "on" else "off"}") })
                 Text(label, style = MaterialTheme.typography.bodyMedium)
             }
         }
@@ -135,6 +139,6 @@ class NotificationFilterActivity : AppCompatActivity() {
         return runCatching {
             pm.getPackageInfo(info.packageName, PackageManager.PackageInfoFlags.of(PackageManager.GET_PERMISSIONS.toLong()))
                 .requestedPermissions?.contains(Manifest.permission.POST_NOTIFICATIONS) == true
-        }.getOrDefault(false)
+        }.onFailure { log.d("${info.packageName}: permissions unreadable (${it.javaClass.simpleName}), not listed") }.getOrDefault(false)
     }
 }

@@ -5,11 +5,13 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageInstaller
+import com.rutger.workstationconnect.AppLog
 
 /** PackageInstaller session status for [Updater]. */
 class UpdateReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val version = intent.getIntExtra(EXTRA_VERSION, -1)
+        AppLog.d("update", "install status broadcast: v$version status=${intent.getIntExtra(PackageInstaller.EXTRA_STATUS, -999)}")
         when (intent.action) {
             ACTION_STATUS -> Updater.onInstallResult(
                 code = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE),
@@ -18,6 +20,7 @@ class UpdateReceiver : BroadcastReceiver() {
                 interactive = intent.getBooleanExtra(EXTRA_INTERACTIVE, false),
                 versionCode = version,
             )
+            else -> AppLog.w("update", "receiver: unexpected action ${intent.action} ignored")
         }
     }
 

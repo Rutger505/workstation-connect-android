@@ -20,6 +20,7 @@ import kotlin.system.exitProcess
  */
 class TetherControlService : ITetherControl.Stub {
 
+    private val log = AppLog.tag("helper")
     private val shell: Context
     private var setupError = ""
 
@@ -27,10 +28,12 @@ class TetherControlService : ITetherControl.Stub {
     constructor() : this(systemContext())
 
     constructor(context: Context) {
+        log.i("helper process start: uid=${Process.myUid()} pid=${Process.myPid()}")
         runCatching { HiddenApiBypass.addHiddenApiExemptions("") }
-            .onFailure { setupError += "hiddenapi: ${describe(it)}; " }
+            .onFailure { setupError += "hiddenapi: ${describe(it)}; "; log.e("hidden api exemption failed", it) }
         shell = runCatching { asShell(context) }
-            .getOrElse { setupError += "asShell: ${describe(it)}; "; context }
+            .onSuccess { log.d("context rebased onto $SHELL") }
+            .getOrElse { setupError += "asShell: ${describe(it)}; "; log.e("asShell failed, tethering calls will likely be refused", it); context }
     }
 
     private val manager: Any get() = shell.getSystemService("tethering") ?: error("tethering service unavailable")
@@ -42,25 +45,36 @@ class TetherControlService : ITetherControl.Stub {
             (if (setupError.isEmpty()) "" else " SETUP ERRORS: $setupError")
 
     override fun startHotspot(): String {
+        log.i("startHotspot")
         val exempt = startOnce(WIFI, exemptFromEntitlement = true)
         if (exempt.ok) return "OK ${exempt.line}"
+        log.w("exempt start failed (${exempt.line}): retry without the entitlement exemption")
         val plain = startOnce(WIFI, exemptFromEntitlement = false)
-        return if (plain.ok) "OK ${plain.line}" else "FAIL exempt[${exempt.line}] plain[${plain.line}]"
+        return if (plain.ok) "OK ${plain.line}" else "FAIL exempt[${exempt.line}] plain[${plain.line}]".also { log.e("startHotspot: $it") }
     }
 
     override fun stopHotspot(): String = runCatching {
+        log.i("stopHotspot")
         val t0 = System.nanoTime()
         managerClass.getMethod("stopTethering", Int::class.javaPrimitiveType).invoke(manager, WIFI)
-        "OK stopTethering(wifi) in ${ms(t0)} ms"
-    }.getOrElse { "FAIL stopTethering: ${describe(it)}" }
+        "OK stopTethering(wifi) in ${ms(t0)} ms".also { log.i(it) }
+    }.getOrElse { log.e("stopTethering failed", it); "FAIL stopTethering: ${describe(it)}" }
 
     override fun shell(command: String): String = runCatching {
+        val t0 = System.nanoTime()
         val p = ProcessBuilder("sh", "-c", command).redirectErrorStream(true).start()
         val out = p.inputStream.bufferedReader().readText().trim()
-        "exit ${p.waitFor()}${if (out.isEmpty()) "" else ": $out"}"
-    }.getOrElse { "FAIL ${describe(it)}" }
+        val code = p.waitFor()
+        log.i("shell: $command → exit $code in ${ms(t0)} ms") // output only in the caller's line (shortened)
+        "exit $code${if (out.isEmpty()) "" else ": $out"}"
+    }.getOrElse { log.e("shell: $command failed", it); "FAIL ${describe(it)}" }
 
-    override fun destroy() = exitProcess(0)
+    override fun takeLog(): String = AppLog.take().joinToString("\n")
+
+    override fun destroy() {
+        log.i("destroy: helper process exits")
+        exitProcess(0)
+    }
 
     private class Result(val ok: Boolean, val line: String)
 
@@ -85,6 +99,7 @@ class TetherControlService : ITetherControl.Stub {
                     outcome = "failed error=$code ${ERRORS[code] ?: "?"}"
                     latch.countDown()
                 }
+                else -> log.d("tethering callback ${m.name} ignored")
             }
             null
         }
@@ -96,10 +111,13 @@ class TetherControlService : ITetherControl.Stub {
             Executor::class.java,
             callbackClass,
         ).invoke(manager, request, Executor { it.run() }, callback)
-        latch.await(START_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        if (!latch.await(START_TIMEOUT_MS, TimeUnit.MILLISECONDS)) log.w("startTethering: no callback within $START_TIMEOUT_MS ms")
         val tag = if (exemptFromEntitlement) "exempt" else "plain"
-        Result(ok, "wifi $tag: $outcome in ${ms(t0)} ms")
-    }.getOrElse { Result(false, describe(it)) }
+        Result(ok, "wifi $tag: $outcome in ${ms(t0)} ms").also { if (ok) log.i(it.line) else log.w(it.line) }
+    }.getOrElse {
+        log.e("startTethering (${if (exemptFromEntitlement) "exempt" else "plain"}) threw", it)
+        Result(false, describe(it))
+    }
 
     private companion object {
         const val SHELL = "com.android.shell"

@@ -66,6 +66,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
 import androidx.lifecycle.lifecycleScope
 import com.rutger.workstationconnect.AppLog
+import com.rutger.workstationconnect.LogFormat
 import com.rutger.workstationconnect.LinkService
 import com.rutger.workstationconnect.Tether
 import com.rutger.workstationconnect.WsConnect
@@ -98,6 +99,7 @@ class LogActivity : AppCompatActivity() {
 
     enum class Filter(val label: String) { ALL("Alles"), BT("Bluetooth"), TETHER("Tethering"), ERRORS("Fouten") }
 
+    private val log = AppLog.tag("ui.log")
     private val status = mutableStateOf<Status?>(null) // set in onCreate: snapshot() needs a context
     private val lines = mutableStateOf(AppLog.lines())
     private var poll: Job? = null
@@ -112,6 +114,7 @@ class LogActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        log.d("open")
         status.value = snapshot()
         setContent {
             KdeTheme(this) {
@@ -211,8 +214,8 @@ class LogActivity : AppCompatActivity() {
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text("Test", Modifier.width(84.dp), style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
-                    OutlinedButton(Tether::on) { Text("Aan") }
-                    OutlinedButton(Tether::off) { Text("Uit") }
+                    OutlinedButton({ Tether.on("log screen test button") }) { Text("Aan") }
+                    OutlinedButton({ Tether.off("log screen test button") }) { Text("Uit") }
                 }
             }
         }
@@ -267,20 +270,23 @@ class LogActivity : AppCompatActivity() {
     @Composable
     private fun LogLine(line: String) {
         val mono = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace, fontSize = 11.sp, lineHeight = 14.sp)
-        val (time, msg) = split(line)
-        if (msg.startsWith("--- ")) {
-            val date = if (time.isEmpty()) "" else line.take(19) + " · "
-            Text(date + msg.trim('-', ' '), Modifier.fillMaxWidth().padding(vertical = 6.dp), style = mono,
+        val p = LogFormat.parse(line)
+        val time = p.time?.substring(11, 19).orEmpty()
+        if (p.msg.startsWith("--- ")) {
+            val date = p.time?.take(19)?.let { "$it · " }.orEmpty()
+            Text(date + p.msg.trim('-', ' '), Modifier.fillMaxWidth().padding(vertical = 6.dp), style = mono,
                 color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
             return
         }
         Row(Modifier.padding(vertical = 1.dp)) {
             Text(time, style = mono, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f))
             Spacer(Modifier.width(8.dp))
-            val level = severity(msg)
-            Text(msg, style = mono, color = when (level) {
-                Level.OFF, Level.OK -> MaterialTheme.colorScheme.onSurface
-                else -> levelColor(level)
+            val level = severity(line)
+            val debug = p.level == LogFormat.Level.D
+            Text((p.tag?.let { "$it: " } ?: "") + p.msg, style = mono, color = when {
+                level == Level.WARN || level == Level.ERROR -> levelColor(level)
+                debug -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                else -> MaterialTheme.colorScheme.onSurface
             }, fontWeight = if (level == Level.ERROR) FontWeight.SemiBold else null)
         }
     }
@@ -322,6 +328,7 @@ class LogActivity : AppCompatActivity() {
             val status = statusText()
             val r = withContext(Dispatchers.IO) { runCatching { LogUpload.uploadNow(Reason.MANUAL, status) } }
             val msg = r.fold({ if (it != null) "Logs geüpload" else "Niets te uploaden" }, { "Uploaden mislukt: ${it.message}" })
+            log.d("manual upload: ${if (r.isSuccess) "done" else "failed (see upload line)"}")
             Toast.makeText(this@LogActivity, msg, Toast.LENGTH_LONG).show()
         }
     }
@@ -331,13 +338,14 @@ class LogActivity : AppCompatActivity() {
             val ok = withContext(Dispatchers.IO) {
                 runCatching { contentResolver.openOutputStream(uri, "wt")!!.use { it.write(text.toByteArray()) } }
             }
-            ok.onFailure { AppLog.i("log export failed: $it") }
+            ok.onFailure { log.e("log export failed", it) }.onSuccess { log.i("log exported to a file (${text.length} chars)") }
             Toast.makeText(this@LogActivity, if (ok.isSuccess) "Log opgeslagen" else "Opslaan mislukt", Toast.LENGTH_SHORT).show()
         }
     }
 
     private fun share() {
         lifecycleScope.launch {
+            log.i("log shared")
             val text = exportText()
             val uri = withContext(Dispatchers.IO) {
                 val dir = File(cacheDir, "logs").apply { mkdirs(); listFiles()?.forEach { it.delete() } }
@@ -364,7 +372,7 @@ class LogActivity : AppCompatActivity() {
     private fun confirmClear() {
         AlertDialog.Builder(this)
             .setMessage("Log wissen? Ook het bestand op de telefoon wordt gewist.")
-            .setPositiveButton("Wissen") { _, _ -> AppLog.clear() }
+            .setPositiveButton("Wissen") { _, _ -> AppLog.clear(); log.i("log cleared by the user") }
             .setNegativeButton("Annuleren", null)
             .show()
     }
@@ -376,31 +384,35 @@ class LogActivity : AppCompatActivity() {
         private val WARN_WORDS = listOf("restart in", "read ended", "warning", "gone", "bluetooth off", "ignored")
         private val BT_WORDS = listOf("rfcomm", "laptop", "bluetooth")
         private val TETHER_WORDS = listOf("tether", "hotspot", "shizuku", "helper", "laptop: on", "laptop: off")
+        private val BT_TAGS = setOf("link")
+        private val TETHER_TAGS = setOf("tether", "helper")
 
-        /** "yyyy-MM-dd HH:mm:ss.SSS msg" → ("HH:mm:ss", msg); other lines (old format, separators) as-is. */
-        fun split(line: String): Pair<String, String> {
-            if (line.length > 24 && line[4] == '-' && line[10] == ' ' && line[23] == ' ') return line.substring(11, 19) to line.substring(24)
-            return "" to line
-        }
-
-        fun severity(msg: String): Level {
-            val m = msg.lowercase()
-            return when {
-                ERROR_WORDS.any { it in m } -> Level.ERROR
-                WARN_WORDS.any { it in m } -> Level.WARN
-                else -> Level.OFF
+        /** From the line's level; old-format lines (no level) by keywords. */
+        fun severity(line: String): Level {
+            val p = LogFormat.parse(line)
+            return when (p.level) {
+                LogFormat.Level.E -> Level.ERROR
+                LogFormat.Level.W -> Level.WARN
+                LogFormat.Level.D, LogFormat.Level.I -> Level.OFF
+                null -> p.msg.lowercase().let { m ->
+                    when {
+                        ERROR_WORDS.any { it in m } -> Level.ERROR
+                        WARN_WORDS.any { it in m } -> Level.WARN
+                        else -> Level.OFF
+                    }
+                }
             }
         }
 
         fun matches(line: String, f: Filter): Boolean {
             if (f == Filter.ALL) return true
-            val msg = split(line).second
-            if (msg.startsWith("--- ")) return true
-            val m = msg.lowercase()
+            val p = LogFormat.parse(line)
+            if (p.msg.startsWith("--- ")) return true
+            val m = p.msg.lowercase()
             return when (f) {
-                Filter.BT -> BT_WORDS.any { it in m }
-                Filter.TETHER -> TETHER_WORDS.any { it in m }
-                Filter.ERRORS -> severity(msg) != Level.OFF
+                Filter.BT -> p.tag in BT_TAGS || BT_WORDS.any { it in m }
+                Filter.TETHER -> p.tag in TETHER_TAGS || TETHER_WORDS.any { it in m }
+                Filter.ERRORS -> severity(line) != Level.OFF
                 Filter.ALL -> true
             }
         }

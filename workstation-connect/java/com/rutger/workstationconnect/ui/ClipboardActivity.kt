@@ -29,6 +29,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.rutger.workstationconnect.AppLog
 import com.rutger.workstationconnect.Clipboard
 import com.rutger.workstationconnect.WsConnect
 import org.kde.kdeconnect.plugins.clipboard.ClipboardPlugin
@@ -37,11 +38,13 @@ import org.kde.kdeconnect.ui.compose.KdeTheme
 /** Clipboard history of both devices. Tap = copy on phone, "→ laptop" = send that item. */
 class ClipboardActivity : AppCompatActivity() {
 
+    private val log = AppLog.tag("ui.clipboard")
     private val items = mutableStateOf(Clipboard.history())
     private val refresh: () -> Unit = { runOnUiThread { items.value = Clipboard.history() } }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        log.d("open (${items.value.size} items)")
         setContent {
             KdeTheme(this) {
                 Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
@@ -88,6 +91,7 @@ class ClipboardActivity : AppCompatActivity() {
 
     private fun copy(text: String) {
         // Plain system copy: counts as a phone copy (moves to top, auto-syncs like any copy).
+        log.i("history item copied on phone (${text.length} chars)")
         getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText(null, text))
         Toast.makeText(this, "Gekopieerd", Toast.LENGTH_SHORT).show()
     }
@@ -95,6 +99,8 @@ class ClipboardActivity : AppCompatActivity() {
     private fun send(text: String) {
         val plugin = WsConnect.laptop(this)?.getPlugin(ClipboardPlugin::class.java)
             ?: return Toast.makeText(this, "Laptop niet bereikbaar", Toast.LENGTH_SHORT).show()
+                .also { log.w("send to laptop: no laptop clipboard plugin (unreachable?)") }
+        log.i("history item sent to laptop (${text.length} chars)")
         plugin.propagateClipboard(text)
         Toast.makeText(this, "Naar laptop gestuurd", Toast.LENGTH_SHORT).show()
     }

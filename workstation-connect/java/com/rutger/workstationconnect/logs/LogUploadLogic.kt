@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package com.rutger.workstationconnect.logs
 
+import com.rutger.workstationconnect.LogFormat
 import java.time.Instant
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
@@ -16,8 +17,9 @@ object LogUploadLogic {
     /** Body cap: the newest lines win. */
     const val MAX_BODY = 1_000_000
 
-    /** Our own upload lines don't count as "new" (else every periodic upload causes the next one). */
-    const val OWN_PREFIX = "log upload: "
+    /** AppLog tag of our own upload lines: they don't count as "new" (else every periodic upload causes the next one). */
+    const val TAG = "upload"
+    private const val LEGACY_OWN_PREFIX = "log upload: "
 
     private val keyTime = DateTimeFormatter.ofPattern("yyyy-MM-dd/HHmmss").withZone(ZoneOffset.UTC)
     private val amz = DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss'Z'").withZone(ZoneOffset.UTC)
@@ -43,8 +45,25 @@ object LogUploadLogic {
         return if (i < 0) lines to false else lines.subList(i + 1, lines.size) to true
     }
 
-    /** Any line that isn't our own upload bookkeeping. Line format: "yyyy-MM-dd HH:mm:ss.SSS message". */
-    fun hasNewLines(lines: List<String>) = lines.any { it.length < 24 || !it.substring(24).startsWith(OWN_PREFIX) }
+    /**
+     * Worth a periodic upload: any info/warn/error line that isn't our own upload bookkeeping. Debug lines
+     * alone don't trigger one (they ride along with the next upload). Old-format lines (no level) count.
+     */
+    fun hasNewLines(lines: List<String>) = lines.any {
+        val p = LogFormat.parse(it)
+        when {
+            p.level == null -> !p.msg.startsWith(LEGACY_OWN_PREFIX)
+            p.level == LogFormat.Level.D -> false
+            else -> p.tag != TAG
+        }
+    }
+
+    /** S3 error body → "<Code>: <Message>" only (the full body can echo the access key + string to sign). */
+    fun s3Error(body: String): String {
+        fun el(name: String) = Regex("<$name>([^<]*)</$name>").find(body)?.groupValues?.get(1)
+        val code = el("Code") ?: return "no S3 error code"
+        return listOfNotNull(code, el("Message")).joinToString(": ").take(200)
+    }
 
     /** Keeps the newest [max] bytes (UTF-8), cut at a line start. */
     fun tail(text: String, max: Int): String {

@@ -8,5 +8,7 @@ interface ITetherControl {
     String whoami() = 3;
     // Runs a command as the shell uid (pm grant, appops). Returns exit code + output.
     String shell(String command) = 4;
+    // AppLog lines buffered in this process since the last call ("\n"-joined), forwarded into the app's log.
+    String takeLog() = 5;
     void destroy() = 16777114; // Shizuku's reserved destroy transaction
 }

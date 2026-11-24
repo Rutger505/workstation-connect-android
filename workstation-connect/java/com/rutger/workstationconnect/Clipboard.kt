@@ -29,6 +29,7 @@ object Clipboard {
 
     private const val PREFS = "wsconnect_clipboard"
     private const val MAX = 50
+    private val log = AppLog.tag("clipboard")
     private lateinit var app: Context
     private val items = ArrayDeque<Item>()
     private val listeners = CopyOnWriteArrayList<() -> Unit>()
@@ -36,7 +37,7 @@ object Clipboard {
     fun init(context: Context) {
         app = context.applicationContext
         load()
-        AppLog.i("clipboard: auto sync ${if (autoSync(app)) "on" else "off"} (READ_LOGS " +
+        log.i("auto sync ${if (autoSync(app)) "on" else "off"} (READ_LOGS " +
             "${if (app.checkSelfPermission(Manifest.permission.READ_LOGS) == PackageManager.PERMISSION_GRANTED) "granted" else "not granted"})")
         ClipboardListener.instance(app).registerObserver(object : ClipboardListener.ClipboardObserver {
             override fun clipboardChanged(content: String, contentType: ClipboardListener.ClipboardContentType) {
@@ -47,7 +48,7 @@ object Clipboard {
     }
 
     /** What upstream's ClipboardPlugin observer does with a phone copy, mirrored. Lengths only, never content. */
-    private fun logPhoneCopy(content: String, type: ClipboardListener.ClipboardContentType) = runCatching {
+    private fun logPhoneCopy(content: String, type: ClipboardListener.ClipboardContentType) = runCatching<Unit> {
         val laptop = WsConnect.laptop(app)
         val plugin = laptop?.getPlugin(ClipboardPlugin::class.java)
         val skip = plugin?.preferences?.getBoolean(app.getString(R.string.clipboard_preference_key_skip_sensitive), false) == true
@@ -58,15 +59,15 @@ object Clipboard {
             !laptop.isReachable -> "not sent: laptop unreachable"
             else -> "sent"
         }
-        AppLog.i("clipboard: phone copy (${type.name.lowercase()}, ${content.length} chars): $what")
-    }
+        log.i("phone copy (${type.name.lowercase()}, ${content.length} chars): $what")
+    }.onFailure { log.w("phone copy: state lookup failed", it) }
 
     /** Hook from upstream ClipboardListener.setText (text that came from the laptop). */
     @JvmStatic
     fun fromLaptop(text: String?) {
-        if (!::app.isInitialized) return
-        AppLog.i("clipboard: received from laptop (${text?.length ?: 0} chars)")
-        if (!text.isNullOrEmpty()) add(text, fromLaptop = true)
+        if (!::app.isInitialized) return AppLog.d("clipboard", "received from laptop before init: not in history")
+        log.i("received from laptop (${text?.length ?: 0} chars)")
+        if (!text.isNullOrEmpty()) add(text, fromLaptop = true) else log.d("empty clip from laptop: not in history")
     }
 
     fun history(): List<Item> = synchronized(items) { items.toList() }
@@ -74,12 +75,13 @@ object Clipboard {
     fun unlisten(l: () -> Unit) = listeners.remove(l)
 
     fun clear() {
+        log.i("history cleared (${history().size} items)")
         synchronized(items) { items.clear() }
         save()
     }
 
     private fun add(text: String, fromLaptop: Boolean) {
-        if (text.isBlank()) return
+        if (text.isBlank()) return log.d("blank clip: not in history")
         synchronized(items) {
             items.removeAll { it.text == text }
             items.addFirst(Item(text, fromLaptop, System.currentTimeMillis()))
@@ -97,7 +99,8 @@ object Clipboard {
                 items.addLast(Item(o.getString("t"), o.getBoolean("l"), o.getLong("a")))
             }
         }
-    }
+        log.d("history loaded (${arr.length()} items)")
+    }.onFailure { log.w("history load failed, starting empty", it) }
 
     private fun save() {
         val arr = JSONArray()
@@ -115,14 +118,14 @@ object Clipboard {
      */
     fun enableAutoSync(c: Context, done: (String) -> Unit) {
         val pkg = c.packageName
-        AppLog.i("clipboard: enabling auto sync (READ_LOGS via shizuku)")
+        log.i("enabling auto sync (READ_LOGS via shizuku)")
         Tether.shell("pm grant $pkg ${Manifest.permission.READ_LOGS} && appops set $pkg SYSTEM_ALERT_WINDOW allow") { r ->
-            if (!r.startsWith("exit 0")) return@shell done(r).also { AppLog.i("clipboard: READ_LOGS grant failed") }
+            if (!r.startsWith("exit 0")) return@shell done(r).also { log.e("READ_LOGS grant failed (details in the shell line)") }
             if (c.checkSelfPermission(Manifest.permission.READ_LOGS) != PackageManager.PERMISSION_GRANTED) {
-                AppLog.i("clipboard: READ_LOGS granted but not active")
+                log.w("READ_LOGS granted but not active")
                 return@shell done("granted but not active: $r")
             }
-            AppLog.i("clipboard: READ_LOGS granted, restarting the app")
+            log.i("READ_LOGS granted, restarting the app")
             restart(c)
         }
     }
@@ -138,8 +141,13 @@ object Clipboard {
     fun defaultSkipSensitive(c: Context) {
         val key = c.getString(R.string.clipboard_preference_key_skip_sensitive)
         KdeConnect.getInstance().devices.values.filter { it.isPaired }.forEach { d ->
-            val prefs = runCatching { d.getPlugin(ClipboardPlugin::class.java)?.preferences }.getOrNull() ?: return@forEach
-            if (!prefs.contains(key)) prefs.edit().putBoolean(key, true).apply()
+            val prefs = runCatching { d.getPlugin(ClipboardPlugin::class.java)?.preferences }
+                .onFailure { log.w("skip-sensitive default: plugin prefs of ${d.name}", it) }.getOrNull()
+                ?: return@forEach log.d("skip-sensitive default: ${d.name} has no clipboard plugin")
+            if (!prefs.contains(key)) {
+                log.i("skip-sensitive default: on for ${d.name}")
+                prefs.edit().putBoolean(key, true).apply()
+            }
         }
     }
 }

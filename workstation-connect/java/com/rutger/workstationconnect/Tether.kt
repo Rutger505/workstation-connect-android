@@ -11,6 +11,7 @@ import android.content.pm.PackageManager
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.SystemClock
 import com.rutger.workstationconnect.logs.LogUpload
 import com.rutger.workstationconnect.logs.LogUploadLogic.Reason
 import org.kde.kdeconnect_tp.BuildConfig
@@ -26,12 +27,15 @@ object Tether {
     /** A saved "hotspot wanted" older than this is ignored, and a restore waiting for Shizuku gives up. */
     private const val RESTORE_MAX_MS = 5 * 60_000L
 
+    private val log = AppLog.tag("tether")
     private val worker = Executors.newSingleThreadExecutor()
     private val listeners = CopyOnWriteArrayList<() -> Unit>()
     @Volatile private var control: ITetherControl? = null
     private val main = Handler(Looper.getMainLooper())
     private lateinit var app: Context
     @Volatile private var restorePending = false
+    /** elapsedRealtime of the last on/off request (0 = none pending): time until the tether broadcast confirms it. */
+    @Volatile private var requestedAt = 0L
 
     @Volatile var wanted = false; private set
     @Volatile var hotspotOn = false; private set
@@ -50,31 +54,39 @@ object Tether {
 
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
-            if (binder == null || !binder.pingBinder()) return AppLog.i("shizuku helper: empty binder")
+            if (binder == null || !binder.pingBinder()) return log.w("shizuku helper: empty binder")
             val c = ITetherControl.Stub.asInterface(binder)
             control = c
-            worker.execute { AppLog.i("shizuku helper: ${runCatching { c.whoami() }.getOrElse { it.toString() }}") }
+            worker.execute {
+                val who = runCatching { c.whoami() }.getOrElse { log.w("shizuku helper: whoami failed", it); "?" }
+                log.i("shizuku helper ready: $who")
+                pullHelperLog(c)
+            }
             changed()
             if (restorePending) {
                 restorePending = false
-                AppLog.i("hotspot restore: shizuku helper ready, hotspot on")
+                log.i("hotspot restore: shizuku helper ready, hotspot on")
                 clearRestore()
             }
-            if (wanted) on() // phone/Shizuku/app (update) restarted while the laptop wanted internet
+            if (wanted) on("still wanted after helper (re)bind") // phone/Shizuku/app (update) restarted while the laptop wanted internet
         }
         override fun onServiceDisconnected(name: ComponentName?) {
             control = null
-            AppLog.i("shizuku helper: disconnected")
+            log.w("shizuku helper: disconnected")
             changed()
         }
     }
 
     fun init(context: Context) {
         app = context.applicationContext
-        Shizuku.addBinderReceivedListenerSticky { AppLog.i("shizuku: running (v${Shizuku.getVersion()})"); bind() }
-        Shizuku.addBinderDeadListener { control = null; AppLog.i("shizuku: stopped"); changed() }
+        Shizuku.addBinderReceivedListenerSticky {
+            log.i("shizuku: running (v${runCatching { Shizuku.getVersion() }.getOrDefault(-1)}, permission ${if (shizukuAllowed) "granted" else "not granted"})")
+            bind()
+        }
+        Shizuku.addBinderDeadListener { control = null; log.w("shizuku: stopped (helper lost)"); changed() }
         Shizuku.addRequestPermissionResultListener { _, result ->
-            AppLog.i("shizuku permission: ${if (result == PackageManager.PERMISSION_GRANTED) "granted" else "denied"}")
+            val granted = result == PackageManager.PERMISSION_GRANTED
+            if (granted) log.i("shizuku permission: granted") else log.w("shizuku permission: denied")
             bind()
         }
         context.registerReceiver(object : BroadcastReceiver() {
@@ -87,9 +99,10 @@ object Tether {
      * the laptop wanted the hotspot, so [restoreAfterUpdate] turns it back on in the new process.
      */
     fun saveForUpdate() {
-        if (!wanted) return clearRestore()
-        prefs().edit().putLong(KEY_RESTORE_AT, System.currentTimeMillis()).commit()
-        AppLog.i("hotspot restore: saved (wanted=$wanted on=$hotspotOn), restored after the update")
+        if (!wanted) return clearRestore().also { log.d("hotspot restore: not wanted, nothing saved") }
+        val saved = prefs().edit().putLong(KEY_RESTORE_AT, System.currentTimeMillis()).commit()
+        if (saved) log.i("hotspot restore: saved (wanted=$wanted on=$hotspotOn), restored after the update")
+        else log.w("hotspot restore: saving failed, hotspot stays off after the update")
     }
 
     /** Install didn't happen (failed/needs a tap): nothing to restore. */
@@ -106,14 +119,14 @@ object Tether {
         val at = prefs().getLong(KEY_RESTORE_AT, 0L).takeIf { it > 0 } ?: return
         val age = System.currentTimeMillis() - at
         if (age !in 0..RESTORE_MAX_MS) {
-            AppLog.i("hotspot restore: saved ${age / 1000} s ago, too old: ignored")
+            log.i("hotspot restore: saved ${age / 1000} s ago, too old: ignored")
             return clearRestore()
         }
-        if (wanted) return // already restoring/on
-        AppLog.i("hotspot restore: wanted before the update (${age / 1000} s ago), helper ${if (control != null) "ready" else "not bound yet: waiting"}")
+        if (wanted) return log.d("hotspot restore: already wanted/restoring") // already restoring/on
+        log.i("hotspot restore: wanted before the update (${age / 1000} s ago), helper ${if (control != null) "ready" else "not bound yet: waiting"}")
         if (control != null) {
             clearRestore()
-            return on()
+            return on("restore after update")
         }
         restorePending = true
         wanted = true // FLAG_WANTED to the laptop; on() follows in onServiceConnected
@@ -122,7 +135,7 @@ object Tether {
         main.postDelayed({
             if (!restorePending) return@postDelayed
             restorePending = false
-            AppLog.i("hotspot restore: no shizuku helper within ${RESTORE_MAX_MS / 60_000} min, gave up")
+            log.w("hotspot restore: no shizuku helper within ${RESTORE_MAX_MS / 60_000} min, gave up")
             clearRestore()
             if (control == null) { wanted = false; changed() }
         }, RESTORE_MAX_MS)
@@ -134,36 +147,54 @@ object Tether {
     fun unlisten(l: () -> Unit) = listeners.remove(l)
 
     fun bind() {
-        if (control != null || !shizukuAllowed) return changed()
+        if (control != null || !shizukuAllowed) {
+            log.d("bind: skipped (${if (control != null) "helper already bound" else "shizuku running=$shizukuRunning, no permission"})")
+            return changed()
+        }
         runCatching { Shizuku.bindUserService(args, connection) }
-            .onFailure { AppLog.i("bindUserService: $it") }
+            .onSuccess { log.d("bindUserService requested (v${BuildConfig.VERSION_CODE})") }
+            .onFailure { log.e("bindUserService failed", it) }
     }
 
     fun requestPermission() {
         when {
-            !shizukuRunning -> AppLog.i("shizuku is not running")
+            !shizukuRunning -> log.w("permission request: shizuku is not running")
             shizukuAllowed -> bind()
-            else -> Shizuku.requestPermission(1)
+            else -> { log.i("shizuku permission requested"); Shizuku.requestPermission(1) }
         }
+    }
+
+    /** Worker thread: the helper process' own AppLog lines (memory only there) into ours. */
+    private fun pullHelperLog(c: ITetherControl) {
+        val text = runCatching { c.takeLog() }.getOrElse { return log.d("helper log not fetched: ${it.javaClass.simpleName}") }
+        AppLog.forward(text.split("\n").filter { it.isNotEmpty() })
     }
 
     /** Runs [command] as the shell uid via the Shizuku helper; [done] gets the result (worker thread). */
     fun shell(command: String, done: (String) -> Unit) = worker.execute {
-        val c = control ?: return@execute done("FAIL no shizuku helper")
-        val r = runCatching { c.shell(command) }.getOrElse { "FAIL $it" }
-        AppLog.i("shell: $command → $r")
+        val c = control ?: return@execute done("FAIL no shizuku helper").also { log.w("shell: $command: no shizuku helper") }
+        val r = runCatching { c.shell(command) }.getOrElse { log.e("shell: $command failed", it); "FAIL $it" }
+        // output shortened: only our own fixed commands run here, but keep lines small
+        val short = r.replace(Regex("\\s+"), " ").let { if (it.length > 200) it.take(200) + "…" else it }
+        if (r.startsWith("exit 0")) log.i("shell: $command → $short") else log.w("shell: $command → $short")
+        pullHelperLog(c)
         done(r)
     }
 
-    fun on() {
+    /** [why]: who asked (logged). */
+    fun on(why: String) {
+        log.i("hotspot on requested ($why, was wanted=$wanted on=$hotspotOn)")
         wanted = true
+        requestedAt = SystemClock.elapsedRealtime()
         changed()
         run("on") { c -> listOf(c.startHotspot()) }
     }
 
-    fun off() {
+    fun off(why: String) {
+        log.i("hotspot off requested ($why, was wanted=$wanted on=$hotspotOn)")
         wanted = false
-        if (restorePending) { restorePending = false; clearRestore(); AppLog.i("hotspot restore: cancelled (off)") }
+        requestedAt = SystemClock.elapsedRealtime()
+        if (restorePending) { restorePending = false; clearRestore(); log.i("hotspot restore: cancelled (off)") }
         changed()
         run("off") { c -> listOf(c.stopHotspot()) }
     }
@@ -172,22 +203,31 @@ object Tether {
         val c = control
         if (c == null) {
             lastError = true
-            AppLog.i("$label: no shizuku helper (running=$shizukuRunning allowed=$shizukuAllowed)")
+            log.e("$label: no shizuku helper (running=$shizukuRunning allowed=$shizukuAllowed)")
             if (label == "on") LogUpload.trigger(Reason.HOTSPOT_FAIL)
             return@execute changed()
         }
-        val results = runCatching { block(c) }.getOrElse { listOf("FAIL $it") }
+        val t0 = SystemClock.elapsedRealtime()
+        val results = runCatching { block(c) }.getOrElse { log.e("$label: helper call failed", it); listOf("FAIL $it") }
+        val ms = SystemClock.elapsedRealtime() - t0
         // DUPLICATE_REQUEST = already on, which is what we wanted.
         lastError = results.any { !it.startsWith("OK") && !it.contains("DUPLICATE_REQUEST") }
-        results.forEach { AppLog.i("$label: $it") }
+        results.forEach { if (lastError) log.e("$label: $it (call $ms ms)") else log.i("$label: $it (call $ms ms)") }
+        pullHelperLog(c)
         if (label == "on") LogUpload.trigger(if (lastError) Reason.HOTSPOT_FAIL else Reason.HOTSPOT_ON)
         changed()
     }
 
     private fun onTetherState(intent: Intent) {
-        val active = intent.getStringArrayListExtra("tetherArray") ?: return
+        val active = intent.getStringArrayListExtra("tetherArray") ?: return log.d("tether broadcast without tetherArray: ignored")
+        val was = hotspotOn
         hotspotOn = active.any { isWifi(it) }
-        AppLog.i("tethered: ${active.ifEmpty { listOf("none") }.joinToString()}")
+        val since = requestedAt.takeIf { it > 0 }?.let { SystemClock.elapsedRealtime() - it }
+        if (hotspotOn != was) {
+            requestedAt = 0
+            log.i("hotspot ${if (hotspotOn) "on" else "off"} (tethered: ${active.ifEmpty { listOf("none") }.joinToString()}" +
+                "${since?.let { ", $it ms after the request" } ?: ", not requested by us"})")
+        } else log.d("tethered: ${active.ifEmpty { listOf("none") }.joinToString()} (hotspot unchanged)")
         changed()
     }
 

@@ -31,7 +31,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 /**
- * Self-update from the CDN (`update.json` written by workstation-connect/publish; version.json is the retired channel of the old com.rutger.wsconnect app):
+ * Self-update from the CDN (`update.json` written by workstation-connect/publish; version.json is the retired channel of the old com.rutger.workstationconnect app):
  * - Check: app start, Home resume (max every 30 min), every 10 min from LinkService, [UpdateWorker]
  *   every 15 min as backup (any network).
  * - Download + sha256 verify, then install right away via a PackageInstaller session (Rutger: no waiting,
@@ -71,6 +71,7 @@ object Updater {
 
     private val baseUrl = BuildConfig.UPDATE_URL.trimEnd('/')
     private val worker = Executors.newSingleThreadExecutor()
+    private val log = AppLog.tag("update")
     private lateinit var app: Application
     @Volatile private var lastCheck = 0L
     @Volatile private var failedInstall: Pair<Int, Long>? = null // versionCode, when
@@ -90,6 +91,7 @@ object Updater {
     fun init(context: Application) {
         app = context
         logVersionChange()
+        log.d("init: periodic worker every $WORKER_INTERVAL_MIN min, checking now")
         WorkManager.getInstance(app).enqueueUniquePeriodicWork(
             UpdateWorker.NAME,
             ExistingPeriodicWorkPolicy.UPDATE,
@@ -97,47 +99,51 @@ object Updater {
                 .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
                 .build(),
         )
-        worker.execute { check() }
+        worker.execute { check("start") }
     }
 
     /** LinkService's 10-min tick. */
     fun checkAsync() {
-        if (::app.isInitialized) worker.execute { check() }
+        if (::app.isInitialized) worker.execute { check("tick") } else log.d("tick check skipped: not initialised")
     }
 
     /** Home resumed: re-check when the last check is stale. */
     fun onResume() {
-        if (System.currentTimeMillis() - lastCheck > RESUME_CHECK_MS) worker.execute { check() }
+        if (System.currentTimeMillis() - lastCheck > RESUME_CHECK_MS) worker.execute { check("home resumed") }
     }
 
     /** Blocking (worker threads only). Fetch update.json; download + verify + install when newer. */
     @Synchronized
-    fun check(): String {
+    fun check(trigger: String): String {
         lastCheck = System.currentTimeMillis()
         val busy = status
-        if (busy is Status.Downloading || busy is Status.Installing) return describe()
+        if (busy is Status.Downloading || busy is Status.Installing) return describe().also { log.d("check ($trigger) skipped: busy, $it") }
         status = Status.Checking
         val release = try {
             fetchRelease()
         } catch (e: Exception) {
             val msg = "controle: ${e.javaClass.simpleName}: ${e.message}"
-            // Every 10 min while offline: log only a new error (each line makes the periodic log upload run).
-            if ((busy as? Status.Failed)?.message != msg) AppLog.i("update: check failed: $e")
+            // Every 10 min while offline: log only a new error (each I/W/E line makes the periodic log upload run).
+            if ((busy as? Status.Failed)?.message != msg) log.w("check ($trigger) failed", e)
+            else log.d("check ($trigger) failed again: ${e.javaClass.simpleName}")
             status = Status.Failed(msg, null)
             return describe()
         }
         if (release.versionCode <= BuildConfig.VERSION_CODE) {
+            if ((busy as? Status.UpToDate)?.latest != release.versionCode) log.d("check ($trigger): up to date (latest v${release.versionCode})")
             dir().deleteRecursively()
             prefs().edit().remove("pending").apply()
             abandonSessions()
             status = Status.UpToDate(release.versionCode)
             return describe()
         }
+        if (busy !is Status.NeedsTap && busy !is Status.Failed) log.i("check ($trigger): v${release.versionCode} (${release.versionName}) available")
         try {
             download(release)
         } catch (e: Exception) {
             val msg = "download: ${e.javaClass.simpleName}: ${e.message}"
-            if ((busy as? Status.Failed)?.message != msg) AppLog.i("update: download v${release.versionCode} failed: $e")
+            if ((busy as? Status.Failed)?.message != msg) log.e("download v${release.versionCode} failed", e)
+            else log.d("download v${release.versionCode} failed again: ${e.javaClass.simpleName}")
             status = Status.Failed(msg, release)
             return describe()
         }
@@ -145,15 +151,17 @@ object Updater {
         val silent = canInstallSilently()
         // Checks run every 10 min: repeat nothing for a release that already waits for a tap or just failed.
         if (!silent && busy is Status.NeedsTap && busy.release == release) {
+            log.d("v${release.versionCode} still waits for a tap: nothing to do")
             status = busy
             return describe()
         }
         val failed = failedInstall
         if (silent && failed != null && failed.first == release.versionCode && System.currentTimeMillis() - failed.second < RETRY_FAILED_MS) {
+            log.d("v${release.versionCode} install failed ${(System.currentTimeMillis() - failed.second) / 60_000} min ago: retry after ${RETRY_FAILED_MS / 60_000} min")
             status = busy
             return describe()
         }
-        AppLog.i("update: v${release.versionCode} downloaded, silent=$silent")
+        log.i("v${release.versionCode} downloaded, silent=$silent")
         if (silent) commit(release, interactive = false) else {
             status = Status.NeedsTap(release)
             notifyNeedsTap(release)
@@ -163,8 +171,9 @@ object Updater {
 
     /** User tapped "Nu installeren". Installs right away. */
     fun installNow() = worker.execute {
-        val r = available ?: pending() ?: return@execute
-        if (!apkFile(r).exists()) { check(); return@execute }
+        val r = available ?: pending() ?: return@execute log.w("install now: no update available")
+        log.i("install now tapped (v${r.versionCode})")
+        if (!apkFile(r).exists()) { log.i("install now: apk missing, downloading first"); check("install now"); return@execute }
         commit(r, interactive = true)
     }
 
@@ -173,12 +182,13 @@ object Updater {
         val file = apkFile(r)
         if (!file.exists()) {
             status = Status.Failed("installeren: ${file.name} ontbreekt", r)
-            return
+            return log.e("commit v${r.versionCode}: ${file.name} missing")
         }
-        AppLog.i("update: committing v${r.versionCode}, interactive=$interactive")
+        log.i("committing v${r.versionCode} (${file.length() / 1024} KiB), interactive=$interactive")
         // Point of no return (the install kills the process): remember the hotspot, upload the log so far.
         Tether.saveForUpdate()
         runCatching { LogUpload.uploadNow(Reason.UPDATE, "installing v${r.versionCode} (${r.versionName}), interactive=$interactive") }
+            .onFailure { log.w("log upload before the install failed, installing anyway: ${it.javaClass.simpleName}") }
         try {
             abandonSessions()
             val installer = app.packageManager.packageInstaller
@@ -198,10 +208,11 @@ object Updater {
                     .putExtra(UpdateReceiver.EXTRA_INTERACTIVE, interactive)
                     .putExtra(UpdateReceiver.EXTRA_VERSION, r.versionCode)
                 status = Status.Installing(r)
+                log.d("session $id written, committing")
                 session.commit(PendingIntent.getBroadcast(app, id, intent, PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT).intentSender)
             }
         } catch (e: Exception) {
-            AppLog.i("update: commit v${r.versionCode} failed: $e")
+            log.e("commit v${r.versionCode} failed", e)
             status = Status.Failed("installeren: ${e.javaClass.simpleName}: ${e.message}", r)
             failedInstall = r.versionCode to System.currentTimeMillis()
             Tether.clearRestore()
@@ -214,16 +225,19 @@ object Updater {
         val r = pending()?.takeIf { it.versionCode == versionCode } ?: available
         when (code) {
             PackageInstaller.STATUS_PENDING_USER_ACTION -> {
-                AppLog.i("update: v$versionCode needs confirmation (interactive=$interactive): $message")
+                log.w("v$versionCode needs confirmation (interactive=$interactive): $message")
                 r?.let { status = Status.NeedsTap(it) } // stays on the card if the dialog is cancelled
                 Tether.clearRestore()
                 if (interactive && confirm != null && LifecycleHelper.isInForeground) {
                     app.startActivity(confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-                } else r?.let(::notifyNeedsTap)
+                } else {
+                    log.d("confirm dialog not opened (interactive=$interactive, foreground=${LifecycleHelper.isInForeground}): notification")
+                    r?.let(::notifyNeedsTap)
+                }
             }
-            PackageInstaller.STATUS_SUCCESS -> AppLog.i("update: v$versionCode installed")
+            PackageInstaller.STATUS_SUCCESS -> log.i("v$versionCode installed")
             else -> {
-                AppLog.i("update: v$versionCode install failed: status=$code $message")
+                log.e("v$versionCode install failed: status=$code $message")
                 status = Status.Failed("installeren mislukt ($code): $message", r)
                 failedInstall = versionCode to System.currentTimeMillis()
                 Tether.clearRestore()
@@ -233,7 +247,7 @@ object Updater {
     }
 
     fun describe(): String {
-        val info = runCatching { app.packageManager.getInstallSourceInfo(app.packageName) }.getOrNull()
+        val info = runCatching { app.packageManager.getInstallSourceInfo(app.packageName) }.onFailure { log.d("install source: $it") }.getOrNull()
         val state = when (val s = status) {
             Status.Idle -> "not checked"
             Status.Checking -> "checking"
@@ -253,9 +267,10 @@ object Updater {
      */
     private fun canInstallSilently(): Boolean {
         val pm = app.packageManager
-        if (!pm.canRequestPackageInstalls()) return false
-        val owner = runCatching { pm.getInstallSourceInfo(app.packageName).updateOwnerPackageName }.getOrNull()
-        return owner == null || owner == app.packageName
+        if (!pm.canRequestPackageInstalls()) return false.also { log.d("not silent: install unknown apps not granted") }
+        val owner = runCatching { pm.getInstallSourceInfo(app.packageName).updateOwnerPackageName }
+            .onFailure { log.w("update owner lookup failed", it) }.getOrNull()
+        return (owner == null || owner == app.packageName).also { if (!it) log.d("not silent: update owner is $owner") }
     }
 
     private fun open(path: String) = (URL("$baseUrl/$path").openConnection() as HttpURLConnection).apply {
@@ -277,16 +292,23 @@ object Updater {
     private fun dir() = File(app.cacheDir, "updates")
     private fun apkFile(r: Release) = File(dir(), "wsconnect-${r.versionCode}-${r.sha256.take(12)}.apk")
     private fun prefs() = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-    private fun pending() = prefs().getString("pending", null)?.let { runCatching { Release.parse(it) }.getOrNull() }
+    private fun pending() = prefs().getString("pending", null)?.let {
+        runCatching { Release.parse(it) }.onFailure { e -> log.w("pending release unreadable", e) }.getOrNull()
+    }
 
     private fun abandonSessions() = app.packageManager.packageInstaller.let { i ->
-        i.mySessions.forEach { runCatching { i.abandonSession(it.sessionId) } }
+        i.mySessions.forEach { s ->
+            log.d("abandoning install session ${s.sessionId}")
+            runCatching { i.abandonSession(s.sessionId) }.onFailure { log.w("abandon session ${s.sessionId}", it) }
+        }
     }
 
     /** Downloads to .part, renamed only after the sha256 matches: an existing final file is verified. */
     private fun download(r: Release) {
         val target = apkFile(r)
-        if (target.exists()) return
+        if (target.exists()) return log.d("v${r.versionCode} already downloaded")
+        log.i("downloading v${r.versionCode} (${r.size / 1024} KiB)")
+        val t0 = System.currentTimeMillis()
         dir().deleteRecursively()
         dir().mkdirs()
         val part = File(dir(), target.name + ".part")
@@ -322,11 +344,12 @@ object Updater {
             error("sha256 mismatch: $sha, expected ${r.sha256}")
         }
         if (!part.renameTo(target)) error("rename ${part.name} failed")
+        log.i("v${r.versionCode} downloaded + sha256 verified in ${System.currentTimeMillis() - t0} ms")
     }
 
     /** Opens Home (update card), not Android's confirm dialog directly. */
     private fun notifyNeedsTap(r: Release) {
-        if (LifecycleHelper.isInForeground) return // the card is on screen
+        if (LifecycleHelper.isInForeground) return log.d("needs-tap notification skipped: home card is on screen")
         val nm = app.getSystemService(NotificationManager::class.java)
         val open = PendingIntent.getActivity(app, 2, Intent(app, HomeActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
@@ -339,14 +362,15 @@ object Updater {
                 .setOnlyAlertOnce(true)
                 .setAutoCancel(true)
                 .build())
-        }
+        }.onSuccess { log.i("needs-tap notification shown (v${r.versionCode})") }
+            .onFailure { log.e("needs-tap notification failed", it) }
     }
 
     private fun logVersionChange() {
         val p = prefs()
         val previous = p.getInt("versionCode", -1)
         if (previous == BuildConfig.VERSION_CODE) return
-        AppLog.i("update: now running ${BuildConfig.VERSION_NAME}, was v$previous")
+        log.i("now running ${BuildConfig.VERSION_NAME}, was v$previous")
         p.edit().clear().putInt("versionCode", BuildConfig.VERSION_CODE).apply()
         app.getSystemService(NotificationManager::class.java).cancel(NOTIFICATION_ID)
     }

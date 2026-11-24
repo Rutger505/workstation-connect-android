@@ -45,6 +45,7 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.lifecycle.lifecycleScope
 import android.widget.Toast
 import androidx.preference.PreferenceManager
+import com.rutger.workstationconnect.AppLog
 import com.rutger.workstationconnect.Clipboard
 import com.rutger.workstationconnect.LinkService
 import com.rutger.workstationconnect.Links
@@ -99,13 +100,25 @@ class HomeActivity : AppCompatActivity() {
     private val ui = mutableStateOf<Ui?>(null) // set in onCreate: snapshot() needs a context
     private var poll: Job? = null
     private val bump: () -> Unit = { runOnUiThread { ui.value = snapshot() } }
-    private val askPermissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { bump() }
+    private val log = AppLog.tag("ui.home")
+    private val askPermissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { r ->
+        logPermissions(r)
+        bump()
+    }
     private val askBtPermissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { r ->
+        logPermissions(r)
         if (r.values.all { it }) setKdeBluetooth(true) else bump()
+    }
+
+    private fun logPermissions(r: Map<String, Boolean>) {
+        val denied = r.filterValues { !it }.keys.map { it.substringAfterLast('.') }
+        if (denied.isEmpty()) log.i("permissions granted: ${r.keys.joinToString { it.substringAfterLast('.') }}")
+        else log.w("permissions denied: ${denied.joinToString()}")
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        log.d("create${if (savedInstanceState != null) " (recreated)" else ""}")
         BackgroundService.Start(applicationContext)
         ui.value = snapshot()
         setContent {
@@ -117,6 +130,7 @@ class HomeActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        log.d("resume")
         BackgroundService.ForceRefreshConnections(applicationContext)
         Clipboard.defaultSkipSensitive(this)
         Tether.listen(bump)
@@ -130,6 +144,11 @@ class HomeActivity : AppCompatActivity() {
         Tether.unlisten(bump)
         KdeConnect.getInstance().removeDeviceListChangedCallback(TAG)
         super.onPause()
+    }
+
+    override fun onDestroy() {
+        log.d("destroy")
+        super.onDestroy()
     }
 
     // ---- state ----
@@ -248,11 +267,11 @@ class HomeActivity : AppCompatActivity() {
                 Text(c.name, Modifier.weight(1f))
                 when (c.state) {
                     PairState.RequestedByPeer -> {
-                        TextButton({ device(c.id)?.cancelPairing() }) { Text("Weigeren") }
-                        Button({ WsConnect.setLaptop(this@HomeActivity, c.id); device(c.id)?.acceptPairing() }) { Text("Accepteren") }
+                        TextButton({ log.i("pairing with ${c.name}: rejected"); device(c.id)?.cancelPairing() }) { Text("Weigeren") }
+                        Button({ log.i("pairing with ${c.name}: accepted"); WsConnect.setLaptop(this@HomeActivity, c.id); device(c.id)?.acceptPairing() }) { Text("Accepteren") }
                     }
                     PairState.Requested -> Text("Wacht op laptop…", style = MaterialTheme.typography.labelMedium)
-                    else -> Button({ WsConnect.setLaptop(this@HomeActivity, c.id); device(c.id)?.requestPairing() }) { Text("Koppelen") }
+                    else -> Button({ log.i("pairing with ${c.name}: requested"); WsConnect.setLaptop(this@HomeActivity, c.id); device(c.id)?.requestPairing() }) { Text("Koppelen") }
                 }
             }
             if (c.state != PairState.NotPaired && c.code != null) Line("Controlecode: ${c.code}")
@@ -303,8 +322,8 @@ class HomeActivity : AppCompatActivity() {
         }, warn = !s.shizukuReady || s.error)
         Line(if (s.btLaptops.isEmpty()) "Geen laptop verbonden (Bluetooth)" else "Verbonden via Bluetooth: ${s.btLaptops.joinToString()}")
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(Tether::on, enabled = s.shizukuReady && !s.wanted) { Text("Nu aanzetten") }
-            OutlinedButton(Tether::off, enabled = s.wanted || s.hotspot) { Text("Uitzetten") }
+            OutlinedButton({ Tether.on("home button") }, enabled = s.shizukuReady && !s.wanted) { Text("Nu aanzetten") }
+            OutlinedButton({ Tether.off("home button") }, enabled = s.wanted || s.hotspot) { Text("Uitzetten") }
         }
     }
 
@@ -328,7 +347,7 @@ class HomeActivity : AppCompatActivity() {
     private fun NotificationsCard(l: Laptop, access: Boolean) = Section("Meldingen") {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Doorsturen naar laptop", Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
-            Switch(l.notifyOn, { device(l.id)?.setPluginEnabled(NOTIFY_KEY, it); bump() })
+            Switch(l.notifyOn, { log.i("notification forwarding ${if (it) "on" else "off"}"); device(l.id)?.setPluginEnabled(NOTIFY_KEY, it); bump() })
         }
         if (!l.notifyOn) return@Section
         if (!access) FilledTonalButton({ startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) }) { Text("Meldingtoegang geven") }
@@ -339,7 +358,8 @@ class HomeActivity : AppCompatActivity() {
 
     private fun missing() = PERMISSIONS.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
 
-    private fun runSetup(step: String) {
+    private fun runSetup(step: String) = runCatching<Unit> {
+        log.i("setup step: $step")
         when {
             step == STEP_PERMISSIONS -> askPermissions.launch(missing().toTypedArray())
             step == STEP_BATTERY -> {
@@ -356,13 +376,16 @@ class HomeActivity : AppCompatActivity() {
             }
             step.startsWith(STEP_PLUGIN) -> {
                 val name = step.removePrefix(STEP_PLUGIN)
-                WsConnect.laptop(this)?.pluginsWithoutPermissions?.values?.firstOrNull { it.displayName == name }
-                    ?.permissionExplanationDialog?.show(supportFragmentManager, null)
+                val plugin = WsConnect.laptop(this)?.pluginsWithoutPermissions?.values?.firstOrNull { it.displayName == name }
+                if (plugin == null) log.w("setup step: plugin $name no longer lacks permissions")
+                plugin?.permissionExplanationDialog?.show(supportFragmentManager, null)
             }
+            else -> log.w("setup step: unknown step ignored")
         }
-    }
+    }.onFailure { log.e("setup step \"$step\" failed", it) }.let { }
 
     private fun setKdeBluetooth(on: Boolean) {
+        log.i("KDE Connect over bluetooth: ${if (on) "on" else "off"}")
         PreferenceManager.getDefaultSharedPreferences(this).edit()
             .putBoolean(SettingsFragment.KEY_BLUETOOTH_ENABLED, on).apply()
         BackgroundService.ForceRefreshConnections(applicationContext) // restarts BluetoothLinkProvider
@@ -370,7 +393,10 @@ class HomeActivity : AppCompatActivity() {
     }
 
     private fun setLink(on: Boolean) {
-        if (on && missing().isNotEmpty()) return askPermissions.launch(missing().toTypedArray())
+        if (on && missing().isNotEmpty()) {
+            log.i("link switch on: asking permissions first (${missing().joinToString { it.substringAfterLast('.') }})")
+            return askPermissions.launch(missing().toTypedArray())
+        }
         WsConnect.setLinkEnabled(this, on)
         if (on) LinkService.start(this) else LinkService.stop(this)
         bump()

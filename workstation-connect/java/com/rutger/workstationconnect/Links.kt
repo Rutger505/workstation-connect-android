@@ -16,15 +16,17 @@ import org.kde.kdeconnect.helpers.ThreadHelper
  */
 object Links {
     enum class Via { WIFI, BLUETOOTH, OTHER }
+    private val log = AppLog.tag("links")
 
     private val field by lazy {
         runCatching { Device::class.java.getDeclaredField("links").apply { isAccessible = true } }
-            .onFailure { AppLog.i("Links: Device.links not found (${it.message}), link type/LAN drop disabled") }
+            .onFailure { log.e("Device.links not found, link type/LAN drop disabled (upstream changed?)", it) }
             .getOrNull()
     }
 
     fun of(d: Device): List<BaseLink> =
-        (runCatching { field?.get(d) as? List<*> }.getOrNull() ?: emptyList<Any>()).filterIsInstance<BaseLink>()
+        (runCatching { field?.get(d) as? List<*> }.onFailure { log.w("reading Device.links of ${d.name}", it) }.getOrNull()
+            ?: emptyList<Any>()).filterIsInstance<BaseLink>()
 
     /** The link packets go over: the first one, like Device.sendPacketBlocking. Null when unreachable. */
     fun via(d: Device): Via? = when (of(d).firstOrNull()) {
@@ -41,16 +43,20 @@ object Links {
      * Only the laptop's LAN link; Bluetooth links and tethering are untouched.
      */
     fun dropLaptopLan(c: Context) = ThreadHelper.runOnNewThread {
-        val d = WsConnect.laptop(c) ?: return@runOnNewThread AppLog.i("net changed: no paired laptop")
+        val d = WsConnect.laptop(c) ?: return@runOnNewThread log.d("net changed: no paired laptop, nothing to drop")
         val lan = of(d).filterIsInstance<LanLink>()
-        if (lan.isEmpty()) return@runOnNewThread AppLog.i("net changed: ${d.name} has no LAN link")
+        if (lan.isEmpty()) return@runOnNewThread log.d("net changed: ${d.name} has no LAN link, nothing to drop")
+        val t0 = System.currentTimeMillis()
         lan.forEach { link ->
-            AppLog.i("net changed: dropping LAN link to ${d.name}")
+            log.i("net changed: dropping LAN link to ${d.name}")
             // Remove first: Device falls back right away; the read thread's later onConnectionLost is a
             // no-op (LanLinkProvider only removes its current link). Closing a dead SSL socket can block.
-            link.linkProvider.onConnectionLost(link)
-            link.disconnect()
+            runCatching {
+                link.linkProvider.onConnectionLost(link)
+                link.disconnect()
+            }.onFailure { log.w("dropping LAN link to ${d.name} failed", it) }
         }
-        lan.first().linkProvider.onNetworkChange(null)
+        runCatching { lan.first().linkProvider.onNetworkChange(null) }.onFailure { log.w("LAN rediscovery failed", it) }
+        log.i("net changed: LAN dropped in ${System.currentTimeMillis() - t0} ms, now via ${via(d)?.name?.lowercase() ?: "nothing (unreachable)"}")
     }
 }

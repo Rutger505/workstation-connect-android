@@ -32,6 +32,7 @@ import kotlin.math.hypot
  */
 class TrackpadActivity : Activity() {
 
+    private val log = AppLog.tag("ui.trackpad")
     private lateinit var deviceId: String
     /** Every send goes through here: counts, and logs when the plugin appears/disappears (sends dropped). */
     private val plugin: MousePadPlugin?
@@ -39,7 +40,7 @@ class TrackpadActivity : Activity() {
             if (p != null) sent++ else dropped++
             if ((p != null) != pluginSeen) {
                 pluginSeen = p != null
-                AppLog.i("trackpad: " + if (p != null) "mousepad plugin available, sending" else "input dropped: ${pluginState()}")
+                if (p != null) log.i("mousepad plugin available, sending") else log.w("input dropped: ${pluginState()}")
             }
         }
     private var pluginSeen: Boolean? = null
@@ -53,16 +54,16 @@ class TrackpadActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        deviceId = intent.getStringExtra(EXTRA_DEVICE_ID) ?: return finish()
+        deviceId = intent.getStringExtra(EXTRA_DEVICE_ID) ?: return finish().also { log.w("opened without a device id: closed") }
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         upEdge = prefs.getInt(KEY_UP_EDGE, 0)
         setContentView(Pad(this))
         pluginSeen = KdeConnect.getInstance().getDevicePlugin(deviceId, MousePadPlugin::class.java) != null
-        AppLog.i("trackpad: open (${pluginState()})")
+        log.i("open (${pluginState()}, up edge $upEdge)")
     }
 
     override fun onDestroy() {
-        if (::deviceId.isInitialized) AppLog.i("trackpad: close ($sent sent, $dropped dropped)")
+        if (::deviceId.isInitialized) log.i("close ($sent sent, $dropped dropped)")
         super.onDestroy()
     }
 
@@ -74,7 +75,7 @@ class TrackpadActivity : Activity() {
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
         when (keyCode) {
             KeyEvent.KEYCODE_VOLUME_UP -> {
-                if (event.repeatCount == 0 && !leftHeld) { leftHeld = true; plugin?.sendSingleHold() }
+                if (event.repeatCount == 0 && !leftHeld) { leftHeld = true; log.d("volume up: left button down"); plugin?.sendSingleHold() }
                 return true
             }
             KeyEvent.KEYCODE_VOLUME_DOWN -> return true
@@ -85,7 +86,7 @@ class TrackpadActivity : Activity() {
     override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
         when (keyCode) {
             KeyEvent.KEYCODE_VOLUME_UP -> { releaseLeft(); return true }
-            KeyEvent.KEYCODE_VOLUME_DOWN -> { plugin?.sendRightClick(); return true }
+            KeyEvent.KEYCODE_VOLUME_DOWN -> { log.d("volume down: right click"); plugin?.sendRightClick(); return true }
         }
         return super.onKeyUp(keyCode, event)
     }
@@ -96,7 +97,7 @@ class TrackpadActivity : Activity() {
     }
 
     private fun releaseLeft() {
-        if (leftHeld) { leftHeld = false; plugin?.sendSingleRelease() }
+        if (leftHeld) { leftHeld = false; log.d("left button up"); plugin?.sendSingleRelease() }
     }
 
     @SuppressLint("ViewConstructor")
@@ -145,8 +146,9 @@ class TrackpadActivity : Activity() {
             if (hypot(sx, sy) >= minSwipe) {
                 upEdge = if (abs(sx) > abs(sy)) { if (sx > 0) 1 else 3 } else { if (sy < 0) 0 else 2 }
                 prefs.edit().putInt(KEY_UP_EDGE, upEdge).apply()
+                log.i("up edge set to $upEdge")
                 performHapticFeedback(HapticFeedbackConstants.CONFIRM)
-            }
+            } else log.d("calibration cancelled (swipe too short)")
             invalidate()
         }
 
@@ -195,7 +197,7 @@ class TrackpadActivity : Activity() {
                     when {
                         calibrating && maxPointers == 1 -> calibrate(x - startX, y - startY)
                         calibrating -> {}
-                        tap && maxPointers >= 3 -> { calibrating = true; performHapticFeedback(HapticFeedbackConstants.LONG_PRESS); invalidate() }
+                        tap && maxPointers >= 3 -> { calibrating = true; log.d("calibration started"); performHapticFeedback(HapticFeedbackConstants.LONG_PRESS); invalidate() }
                         tap && maxPointers == 2 -> p?.sendRightClick()
                         tap -> p?.sendLeftClick()
                     }

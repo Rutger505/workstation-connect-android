@@ -8,7 +8,7 @@
 #   workstation-connect-<versionCode>.apk   uploaded once (what the app downloads, never overwritten)
 #   workstation-connect.apk                 server-side copy of it (stable link for manual installs)
 #   update.json                             {versionCode, versionName, apk, sha256, size}
-# version.json in the same dir is the retired channel of the old com.rutger.wsconnect app: never write it
+# version.json in the same dir is the retired channel of the old com.rutger.workstationconnect app: never write it
 # (that app would try to install this differently-packaged APK over itself).
 # Each one is verified by downloading it again. Refuses -dirty / -local builds and versionCodes not
 # newer than the published one. Keeps the newest 3 versioned APKs.

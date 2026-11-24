@@ -26,23 +26,40 @@ import org.kde.kdeconnect_tp.R
 object StatusNotification {
     /** = upstream's BackgroundService.FOREGROUND_NOTIFICATION_ID (private there). */
     const val ID = 1
+    private val log = AppLog.tag("status")
+    @Volatile private var lastShown: String? = null
 
     /** Full content: upstream's (with actions) while BackgroundService runs, else fallback without actions. */
     fun build(c: Context): Notification =
         BackgroundService.instance?.createForegroundNotification() ?: decorate(c, fallback(c))
 
     /** Hook target: upstream's createForegroundNotification returns through here. */
-    fun decorate(c: Context, b: NotificationCompat.Builder): Notification = b
-        .setContentTitle(kdeLine())
-        .setContentText(linkLine())
-        .setContentIntent(PendingIntent.getActivity(c, 0, Intent(c, HomeActivity::class.java), PendingIntent.FLAG_IMMUTABLE))
-        .setOnlyAlertOnce(true)
-        .build()
+    fun decorate(c: Context, b: NotificationCompat.Builder): Notification {
+        val title = kdeLine()
+        val text = linkLine()
+        // called on every upstream refresh: log changes only
+        val shown = "$title | $text"
+        if (shown != lastShown) {
+            lastShown = shown
+            log.d("notification: $shown (upstream actions: ${BackgroundService.instance != null})")
+        }
+        return b
+            .setContentTitle(title)
+            .setContentText(text)
+            .setContentIntent(PendingIntent.getActivity(c, 0, Intent(c, HomeActivity::class.java), PendingIntent.FLAG_IMMUTABLE))
+            .setOnlyAlertOnce(true)
+            .build()
+    }
 
     /** Any thread. No-op while neither service runs (see class doc). */
     fun refresh(c: Context) {
-        if (!LinkService.running && BackgroundService.instance == null) return
-        c.getSystemService(NotificationManager::class.java).notify(ID, build(c))
+        if (!LinkService.running && BackgroundService.instance == null) {
+            if (lastShown != null) log.d("refresh skipped: no service holds the notification")
+            lastShown = null
+            return
+        }
+        runCatching { c.getSystemService(NotificationManager::class.java).notify(ID, build(c)) }
+            .onFailure { log.e("status notification post failed", it) }
     }
 
     private fun kdeLine(): String {
