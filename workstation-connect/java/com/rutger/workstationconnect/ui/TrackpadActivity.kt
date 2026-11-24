@@ -59,7 +59,7 @@ class TrackpadActivity : Activity() {
         upEdge = prefs.getInt(KEY_UP_EDGE, 0)
         setContentView(Pad(this))
         pluginSeen = KdeConnect.getInstance().getDevicePlugin(deviceId, MousePadPlugin::class.java) != null
-        log.i("open (${pluginState()}, up edge $upEdge)")
+        log.i("open (${pluginState()}, up edge $upEdge, pointer speed $POINTER_SPEED)")
     }
 
     override fun onDestroy() {
@@ -102,7 +102,7 @@ class TrackpadActivity : Activity() {
 
     @SuppressLint("ViewConstructor")
     private inner class Pad(context: Context) : View(context) {
-        private val scale = STANDARD_DPI / resources.displayMetrics.xdpi
+        private val scale = STANDARD_DPI / resources.displayMetrics.xdpi * POINTER_SPEED
         private val slop = 12 * resources.displayMetrics.density
         private var lastX = 0f
         private var lastY = 0f
@@ -211,6 +211,7 @@ class TrackpadActivity : Activity() {
     companion object {
         const val EXTRA_DEVICE_ID = "deviceId"
         private const val STANDARD_DPI = 240f
+        private const val POINTER_SPEED = 2.5f // pointer only, scroll has SCROLL_FACTOR
         private const val SCROLL_FACTOR = 0.35
         private const val MIN_SCROLL = 2.5
         private const val TAP_MS = 220L
