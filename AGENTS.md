@@ -13,6 +13,7 @@ Link protocol: single source in the laptop repo README (Rutger505/workstation-co
 - Publish only via `workstation-connect/publish` on a clean, pushed main (`DRY_RUN=1` to check). Never copy the APK to the CDN by hand: installed apps auto-update from `update.json` (`version.json` = retired channel of the old app id: never write it).
 - Logs key never in git (public repo): read at build time from `~/.config/wsconnect-logs/env`.
 - Unit tests: `./gradlew testDebugUnitTest --tests 'com.rutger.workstationconnect.*'`.
+- **Logging**: every change ships with AppLog lines (`AppLog.tag(...)`, WORKSTATION-CONNECT.md "Log upload"): state changes/lifecycle `i`, decisions/skips + frames `d`, failures `w`/`e` with context + throwable (no silent `runCatching`), changes not repeats in loops. Never secrets or content (clipboard/notification text, keys, signed URLs).
 - Unwanted upstream code (mouse/keyboard receivers): delete, never exclude; KSP's plugin index ignores source-set excludes.
 
 ## Pitfalls

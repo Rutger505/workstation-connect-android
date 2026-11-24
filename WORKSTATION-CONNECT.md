@@ -65,8 +65,8 @@ echo "sdk.dir=$ANDROID_HOME" > local.properties
   `WSCONNECT_UPDATE_URL=<url>` at build time overrides it (adds `-local` to versionName). Uncommitted changes add `-dirty`.
 - Silent = self-update (`UPDATE_PACKAGES_WITHOUT_USER_ACTION` + `USER_ACTION_NOT_REQUIRED`), also right after an
   adb/browser install, as long as "install unknown apps" is granted. Otherwise: Home card + notification, tap.
-  A failed silent install of a version is retried after 1 h. Checks every 10 min log only new errors (every AppLog
-  line makes the periodic log upload run).
+  A failed silent install of a version is retried after 1 h. Checks every 10 min log only new errors (every
+  info/warn/error line makes the periodic log upload run; "up to date" and repeats are debug).
 - **Hotspot across the update** (the install kills the process): before the commit `Tether.saveForUpdate` stores
   "wanted" with a timestamp (prefs `wsconnect-tether`), then the log is uploaded (reason `update`). The new process
   (`WsConnect.init`, also `BootReceiver` on MY_PACKAGE_REPLACED, idempotent) calls `Tether.restoreAfterUpdate`:
@@ -89,6 +89,12 @@ commit, dropped afterwards) with `WSCONNECT_UPDATE_URL=http://10.0.2.2:8765/`; s
 
 ## Log upload
 
+- `AppLog` (`AppLog.kt`, format in `LogFormat.kt`): `private val log = AppLog.tag("link")`, `log.d/i/w/e(msg[, throwable])`.
+  Line `yyyy-MM-dd HH:mm:ss.SSS L tag: message`; multi-line messages and stack traces = one line each, same prefix.
+  All levels: memory, `files/wsconnect.log`, upload, logcat (`wsc.<tag>`, matching priority). Old lines without level
+  still parse. Shizuku helper process: memory + logcat only; `Tether` pulls its lines via `ITetherControl.takeLog`
+  after every call (tag `helper`).
+
 - `workstation-connect/java/.../logs/`: `LogUpload` (Android), `LogUploadLogic` + `SigV4` (pure, JVM tests in `workstation-connect/test/`,
   `./gradlew testDebugUnitTest --tests 'com.rutger.workstationconnect.*'`). Mirrors the laptop's `logs.rs`/`sigv4.rs`.
 - PUT `https://cdn.rutgerpronk.com/wsconnect-logs/phone/<Build.MODEL>/<YYYY-MM-DD>/<HHMMSS>-<reason>.log` (UTC,
@@ -98,7 +104,7 @@ commit, dropped afterwards) with `WSCONNECT_UPDATE_URL=http://10.0.2.2:8765/`; s
 - Reasons: `start` (process start, so also after an update), `link-connect`/`link-lost` (RFCOMM), `hotspot-on`/
   `hotspot-fail`, `update` (blocking right before the install commit; install failed), `crash` (uncaught exception
   handler writes the trace to AppLog synchronously, uploaded on the next start), `periodic` (10 min tick / worker,
-  only with new lines; `log upload: ` lines don't count), `manual` (LogActivity "Logs uploaden", status as extra).
+  only with new info/warn/error lines; debug and `upload`-tag lines don't count), `manual` (LogActivity "Logs uploaden", status as extra).
   Triggers within 5 s = one upload; failure keeps the marker, reasons retried with the next trigger.
 - **Key never in git** (public repo): write-only key read at build time by `workstation-connect.gradle` from
   `~/.config/wsconnect-logs/env` (`WSCONNECT_LOGS_ACCESS_KEY=…`, `WSCONNECT_LOGS_SECRET_KEY=…`; `WSCONNECT_LOGS_ENV`
