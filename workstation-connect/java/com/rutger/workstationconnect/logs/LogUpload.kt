@@ -18,7 +18,7 @@ import java.util.concurrent.TimeUnit
  * laptop's logs.rs. Only lines since the last successful upload ([KEY_MARKER] = its last line), newest
  * [LogUploadLogic.MAX_BODY]. Triggers within [DEBOUNCE_MS] become one upload, one upload at a time on
  * [exec]. Failure: marker stays, reasons retried with the next trigger. Key: write-only, injected at
- * build time (wsconnect.gradle); empty = upload off.
+ * build time (workstation-connect.gradle); empty = upload off.
  */
 object LogUpload {
     private const val HOST = "cdn.rutgerpronk.com"
@@ -141,7 +141,7 @@ object LogUpload {
             c.setRequestProperty("x-amz-content-sha256", hash)
             c.setRequestProperty("x-amz-date", date)
             c.setRequestProperty("Authorization", auth)
-            c.setRequestProperty("User-Agent", "wsconnect-android/${BuildConfig.VERSION_CODE}")
+            c.setRequestProperty("User-Agent", "workstation-connect-android/${BuildConfig.VERSION_CODE}")
             c.outputStream.use { it.write(body) }
             val code = c.responseCode
             if (code !in 200..299) {

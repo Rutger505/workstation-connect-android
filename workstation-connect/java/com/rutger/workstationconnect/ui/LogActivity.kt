@@ -287,7 +287,7 @@ class LogActivity : AppCompatActivity() {
 
     // ---- actions ----
 
-    private fun exportName() = "wsconnect-log-${SimpleDateFormat("yyyyMMdd-HHmmss", Locale.ROOT).format(Date())}.txt"
+    private fun exportName() = "workstation-connect-log-${SimpleDateFormat("yyyyMMdd-HHmmss", Locale.ROOT).format(Date())}.txt"
 
     private suspend fun exportText(): String {
         val header = buildString {
@@ -357,7 +357,7 @@ class LogActivity : AppCompatActivity() {
 
     private fun copyLog() {
         getSystemService(ClipboardManager::class.java)
-            .setPrimaryClip(ClipData.newPlainText("wsconnect log", statusText() + "\n" + AppLog.text()))
+            .setPrimaryClip(ClipData.newPlainText("workstation-connect log", statusText() + "\n" + AppLog.text()))
         Toast.makeText(this, "Log gekopieerd", Toast.LENGTH_SHORT).show()
     }
 

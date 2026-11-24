@@ -100,7 +100,7 @@ commit, dropped afterwards) with `WSCONNECT_UPDATE_URL=http://10.0.2.2:8765/`; s
   handler writes the trace to AppLog synchronously, uploaded on the next start), `periodic` (10 min tick / worker,
   only with new lines; `log upload: ` lines don't count), `manual` (LogActivity "Logs uploaden", status as extra).
   Triggers within 5 s = one upload; failure keeps the marker, reasons retried with the next trigger.
-- **Key never in git** (public repo): write-only key read at build time by `wsconnect.gradle` from
+- **Key never in git** (public repo): write-only key read at build time by `workstation-connect.gradle` from
   `~/.config/wsconnect-logs/env` (`WSCONNECT_LOGS_ACCESS_KEY=…`, `WSCONNECT_LOGS_SECRET_KEY=…`; `WSCONNECT_LOGS_ENV`
   overrides the path) into `BuildConfig.LOGS_*`. Missing → empty → upload off (one AppLog line, button hidden).
   The build prints only found/MISSING. It does end up in the published APK: write-only, so worst case is junk uploads.
