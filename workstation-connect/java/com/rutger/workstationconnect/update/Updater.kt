@@ -9,6 +9,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageInstaller
+import android.os.SystemClock
 import androidx.work.Constraints
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.NetworkType
@@ -29,10 +30,11 @@ import java.net.URL
 import java.security.MessageDigest
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Self-update from the CDN (`update.json` written by workstation-connect/publish; version.json is the retired channel of the old com.rutger.workstationconnect app):
- * - Check: app start, Home resume (max every 30 min), every 10 min from LinkService, [UpdateWorker]
+ * - Check: app start, every Home resume (throttled, [UpdateLogic.resumeDecision]), every 10 min from LinkService, [UpdateWorker]
  *   every 15 min as backup (any network).
  * - Download + sha256 verify, then install right away via a PackageInstaller session (Rutger: no waiting,
  *   also not for tethering or the app being on screen). The install kills the process: the hotspot is
@@ -65,7 +67,6 @@ object Updater {
     }
 
     private const val WORKER_INTERVAL_MIN = 15L // WorkManager minimum; LinkService checks every 10 min
-    private const val RESUME_CHECK_MS = 30 * 60_000L
     /** A silent install of a version that failed is retried by the periodic check after this. */
     private const val RETRY_FAILED_MS = 60 * 60_000L
     private const val NOTIFICATION_ID = 7703 // LinkService uses 7702, status notification 1
@@ -75,7 +76,8 @@ object Updater {
     private val worker = Executors.newSingleThreadExecutor()
     private val log = AppLog.tag("update")
     private lateinit var app: Application
-    @Volatile private var lastCheck = 0L
+    @Volatile private var lastFinished = 0L // elapsedRealtime, 0 = never
+    private val resumeQueued = AtomicBoolean(false)
     @Volatile private var failedInstall: Pair<Int, Long>? = null // versionCode, when
 
     @Volatile var status: Status = Status.Idle; private set
@@ -109,15 +111,30 @@ object Updater {
         if (::app.isInitialized) worker.execute { check("tick") } else log.d("tick check skipped: not initialised")
     }
 
-    /** Home resumed: re-check when the last check is stale. */
+    /** Home resumed: fresh check every time (Home shows the outcome), unless one runs or just finished. */
     fun onResume() {
-        if (System.currentTimeMillis() - lastCheck > RESUME_CHECK_MS) worker.execute { check("home resumed") }
+        if (!::app.isInitialized) return log.d("resume check skipped: not initialised")
+        val running = resumeQueued.get() || status is Status.Checking
+        when (val d = UpdateLogic.resumeDecision(SystemClock.elapsedRealtime(), lastFinished, running)) {
+            UpdateLogic.ResumeDecision.SkipRunning -> log.d("resume check skipped: a check is running")
+            is UpdateLogic.ResumeDecision.SkipRecent -> log.d("resume check skipped: last check ${d.agoMs / 1000} s ago")
+            UpdateLogic.ResumeDecision.Check -> {
+                if (!resumeQueued.compareAndSet(false, true)) return log.d("resume check skipped: already queued")
+                log.d("resume check queued")
+                worker.execute { try { check("home resumed") } finally { resumeQueued.set(false) } }
+            }
+        }
     }
 
     /** Blocking (worker threads only). Fetch update.json; download + verify + install when newer. */
     @Synchronized
-    fun check(trigger: String): String {
-        lastCheck = System.currentTimeMillis()
+    fun check(trigger: String): String = try {
+        checkLocked(trigger)
+    } finally {
+        lastFinished = SystemClock.elapsedRealtime()
+    }
+
+    private fun checkLocked(trigger: String): String {
         val busy = status
         if (busy is Status.Downloading || busy is Status.Installing) return describe().also { log.d("check ($trigger) skipped: busy, $it") }
         status = Status.Checking

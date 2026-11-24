@@ -40,6 +40,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.app.NotificationManagerCompat
 import androidx.lifecycle.lifecycleScope
@@ -51,6 +52,7 @@ import com.rutger.workstationconnect.LinkService
 import com.rutger.workstationconnect.Links
 import com.rutger.workstationconnect.Tether
 import com.rutger.workstationconnect.WsConnect
+import com.rutger.workstationconnect.update.UpdateLogic
 import com.rutger.workstationconnect.update.Updater
 import androidx.appcompat.app.AlertDialog
 import kotlinx.coroutines.Job
@@ -91,7 +93,7 @@ class HomeActivity : AppCompatActivity() {
         val laptop: Laptop?, val candidates: List<Candidate>, val setup: List<String>,
         val linkEnabled: Boolean, val shizukuReady: Boolean, val error: Boolean, val hotspot: Boolean,
         val wanted: Boolean, val btLaptops: List<String>, val notifyAccess: Boolean,
-        val autoClip: Boolean, val kdeBluetooth: Boolean, val update: Update?,
+        val autoClip: Boolean, val kdeBluetooth: Boolean, val update: Update?, val version: String,
     )
 
     @Immutable
@@ -185,6 +187,7 @@ class HomeActivity : AppCompatActivity() {
             autoClip = Clipboard.autoSync(this),
             kdeBluetooth = PreferenceManager.getDefaultSharedPreferences(this).getBoolean(SettingsFragment.KEY_BLUETOOTH_ENABLED, false),
             update = update(),
+            version = UpdateLogic.versionLine(BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE, Updater.status),
         )
     }
 
@@ -214,7 +217,7 @@ class HomeActivity : AppCompatActivity() {
             Row(verticalAlignment = Alignment.Bottom) {
                 Text("Workstation Connect", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.width(8.dp))
-                Text(BuildConfig.VERSION_NAME, style = MaterialTheme.typography.labelSmall,
+                Text(s.version, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis,
                     color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(bottom = 4.dp))
             }
             s.update?.let { UpdateCard(it) }
