@@ -1,18 +1,18 @@
 # workstation-connect-android
 
 Fork of KDE Connect Android (GPL) = phone side of workstation-connect: own home screen, auto hotspot (Bluetooth RFCOMM control link + Shizuku tethering), trackpad.
-`WSCONNECT.md` = layout, upstream hooks, upstream merges, build, updates + publish, log upload, emulator test. `README.md` is upstream's: don't edit.
+`WORKSTATION-CONNECT.md` = layout, upstream hooks, upstream merges, build, updates + publish, log upload, emulator test. `README.md` is upstream's: don't edit.
 Link protocol: single source in the laptop repo README (Rutger505/workstation-connect, "Protocol v5"); change it there + `Proto.kt` + `proto.rs` together, bump `Proto.VERSION`.
 
 ## Rules
 
-- **Git**: commit + push straight to `main`. Exception: upstream merges in a branch `upstream-vX.Y.Z` + PR (steps in WSCONNECT.md). Remote `upstream` = invent.kde.org.
-- Our code only in `wsconnect/` + the marked upstream hooks listed in WSCONNECT.md. Keep own changes in few separate files/commits so upstream merges stay cheap.
-- Never edit upstream strings: "Workstation Connect" rebrand happens at build time in `wsconnect.gradle`. apply-from scripts can't see AGP classes: load them reflectively.
-- App id `com.rutger.wsconnect`, versionCode = commit count, ship the **debug** build (upstream `debug.keystore`). Build of a dirty tree = `-dirty`, publish refuses it: commit first.
-- Publish only via `wsconnect/publish` on a clean, pushed main (`DRY_RUN=1` to check). Never copy the APK to the CDN by hand: installed apps auto-update from `version.json`.
+- **Git**: commit + push straight to `main`. Exception: upstream merges in a branch `upstream-vX.Y.Z` + PR (steps in WORKSTATION-CONNECT.md). Remote `upstream` = invent.kde.org.
+- Our code only in `workstation-connect/` + the marked upstream hooks listed in WORKSTATION-CONNECT.md. Keep own changes in few separate files/commits so upstream merges stay cheap.
+- Never edit upstream strings: "Workstation Connect" rebrand happens at build time in `workstation-connect.gradle`. apply-from scripts can't see AGP classes: load them reflectively.
+- App id `com.rutger.workstationconnect` (was `com.rutger.wsconnect`: different app to Android), versionCode = commit count, ship the **debug** build (upstream `debug.keystore`). Build of a dirty tree = `-dirty`, publish refuses it: commit first.
+- Publish only via `workstation-connect/publish` on a clean, pushed main (`DRY_RUN=1` to check). Never copy the APK to the CDN by hand: installed apps auto-update from `update.json` (`version.json` = retired channel of the old app id: never write it).
 - Logs key never in git (public repo): read at build time from `~/.config/wsconnect-logs/env`.
-- Unit tests: `./gradlew testDebugUnitTest --tests 'com.rutger.wsconnect.*'`.
+- Unit tests: `./gradlew testDebugUnitTest --tests 'com.rutger.workstationconnect.*'`.
 - Unwanted upstream code (mouse/keyboard receivers): delete, never exclude; KSP's plugin index ignores source-set excludes.
 
 ## Pitfalls
