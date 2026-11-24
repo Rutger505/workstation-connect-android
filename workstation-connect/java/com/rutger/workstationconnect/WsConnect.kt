@@ -5,10 +5,12 @@ import android.app.Application
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import androidx.preference.PreferenceManager
 import com.rutger.workstationconnect.logs.LogUpload
 import com.rutger.workstationconnect.update.Updater
 import org.kde.kdeconnect.Device
 import org.kde.kdeconnect.KdeConnect
+import org.kde.kdeconnect.ui.SettingsFragment
 
 /**
  * Entry point for everything workstation-connect adds to KDE Connect. Upstream's KdeConnect
@@ -31,12 +33,21 @@ object WsConnect {
         LogUpload.init(app) // crash handler early
         Tether.init(app)
         Clipboard.init(app)
+        forceKdeBluetooth(app)
         if (linkEnabled(app)) LinkService.start(app) else log.i("bluetooth link off (setting): not started")
         Updater.init(app)
         Diag.init(app)
         Pairing.init(app)
         Tether.restoreAfterUpdate()
         log.i("init done in ${System.currentTimeMillis() - t0} ms")
+    }
+
+    /** KDE Connect's own Bluetooth backend (trackpad etc. without shared wifi) is always on; no toggle. Before BackgroundService starts. */
+    private fun forceKdeBluetooth(c: Context) {
+        val p = PreferenceManager.getDefaultSharedPreferences(c)
+        if (p.getBoolean(SettingsFragment.KEY_BLUETOOTH_ENABLED, false)) return
+        p.edit().putBoolean(SettingsFragment.KEY_BLUETOOTH_ENABLED, true).apply()
+        log.i("KDE Connect over bluetooth: forced on")
     }
 
     private fun prefs(c: Context) = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE)

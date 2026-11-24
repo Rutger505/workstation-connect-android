@@ -65,7 +65,7 @@ class SettingsFragment : PreferenceFragmentCompat() {
             persistentNotificationPref(context),
             trustedNetworkPref(context),
             devicesByIpPref(context),
-            bluetoothSupportPref(context),
+            // workstation-connect: bluetoothSupportPref removed, KDE Connect over Bluetooth is always on (WsConnect.init)
             exportLogsPref(context),
             moreSettingsPref(context),
         ).forEach(screen::addPreference)

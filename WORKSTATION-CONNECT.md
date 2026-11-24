@@ -17,6 +17,7 @@ notifications, clipboard, files). Laptop side: [Rutger505/workstation-connect](h
   - `src/main/java/org/kde/kdeconnect/KdeConnect.kt`: helper-process guard + `WsConnect.init`
   - `src/main/java/org/kde/kdeconnect/plugins/clipboard/ClipboardListener.kt`: `setText` → `Clipboard.fromLaptop` (history)
   - `src/main/java/org/kde/kdeconnect/ui/MainActivity.kt`: `onCreate` → `HomeRedirect.toHome` (notifications/shortcuts land in our UI)
+  - `src/main/java/org/kde/kdeconnect/ui/SettingsFragment.kt`: Bluetooth switch removed (always on, forced in `WsConnect.init`)
   - `src/main/java/org/kde/kdeconnect/BackgroundService.kt`: `createForegroundNotification` public, returns via `StatusNotification.decorate`
     (one ongoing notification, ID 1, shared with `LinkService`: title KDE Connect status, text laptop link, upstream's actions)
 - No hook, but upstream internals read by reflection: `Device.links` (private) in `workstation-connect/.../Links.kt` (link type on Home,
