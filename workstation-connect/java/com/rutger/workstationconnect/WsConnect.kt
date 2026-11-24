@@ -34,6 +34,7 @@ object WsConnect {
         if (linkEnabled(app)) LinkService.start(app) else log.i("bluetooth link off (setting): not started")
         Updater.init(app)
         Diag.init(app)
+        Pairing.init(app)
         Tether.restoreAfterUpdate()
         log.i("init done in ${System.currentTimeMillis() - t0} ms")
     }

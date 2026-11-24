@@ -13,6 +13,9 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -33,6 +36,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
@@ -40,10 +44,15 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.app.NotificationManagerCompat
@@ -54,6 +63,8 @@ import com.rutger.workstationconnect.AppLog
 import com.rutger.workstationconnect.Clipboard
 import com.rutger.workstationconnect.LinkService
 import com.rutger.workstationconnect.Links
+import com.rutger.workstationconnect.Pairing
+import com.rutger.workstationconnect.PairingLogic
 import com.rutger.workstationconnect.Tether
 import com.rutger.workstationconnect.WsConnect
 import com.rutger.workstationconnect.update.UpdateLogic
@@ -90,7 +101,10 @@ class HomeActivity : AppCompatActivity() {
     )
 
     @Immutable
-    data class Candidate(val id: String, val name: String, val state: PairState, val code: String?)
+    data class Candidate(
+        val id: String, val name: String, val state: PairState, val code: String?,
+        val failure: String?, val waitedMs: Long?, // last pairing failure (1 min), ms since our request
+    )
 
     @Immutable
     data class Ui(
@@ -98,7 +112,12 @@ class HomeActivity : AppCompatActivity() {
         val linkEnabled: Boolean, val shizukuReady: Boolean, val error: Boolean, val hotspot: Boolean,
         val wanted: Boolean, val btLaptops: List<String>, val notifyAccess: Boolean,
         val autoClip: Boolean, val kdeBluetooth: Boolean, val update: Update?, val version: String,
+        val byIp: ByIpLine?,
     )
+
+    /** Add-by-IP status line; [searching] = input disabled, no dismiss. */
+    @Immutable
+    data class ByIpLine(val text: String, val warn: Boolean, val searching: Boolean)
 
     @Immutable
     data class Update(val versionName: String, val line: String, val canInstall: Boolean)
@@ -201,7 +220,9 @@ class HomeActivity : AppCompatActivity() {
             )
         }
         val candidates = if (d != null) emptyList() else all.filter { it.isReachable && !it.isPaired }
-            .sortedBy { it.name }.map { Candidate(it.deviceId, it.name, it.pairStatus, it.verificationKey) }
+            .sortedBy { it.name }.map {
+                Candidate(it.deviceId, it.name, it.pairStatus, it.verificationKey, Pairing.failure(it.deviceId), Pairing.requestedFor(it.deviceId))
+            }
         return Ui(
             laptop = laptop, candidates = candidates, setup = setupSteps(d),
             linkEnabled = WsConnect.linkEnabled(this), shizukuReady = Tether.ready, error = Tether.lastError,
@@ -212,7 +233,19 @@ class HomeActivity : AppCompatActivity() {
             kdeBluetooth = PreferenceManager.getDefaultSharedPreferences(this).getBoolean(SettingsFragment.KEY_BLUETOOTH_ENABLED, false),
             update = update(),
             version = UpdateLogic.versionLine(BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE, Updater.status),
+            byIp = byIpLine(),
         )
+    }
+
+    private fun byIpLine(): ByIpLine? = when (val r = Pairing.byIp) {
+        null -> null
+        is Pairing.ByIp.Searching -> ByIpLine("Zoeken naar laptop op ${r.host}… (nog ${
+            PairingLogic.secondsLeft(Pairing.SEARCH_MS, SystemClock.elapsedRealtime() - r.since)} s)", false, true)
+        is Pairing.ByIp.Requested -> ByIpLine("${r.name} gevonden op ${r.host}, koppelverzoek gestuurd", false, false)
+        is Pairing.ByIp.AlreadyPaired -> ByIpLine("${r.name} op ${r.host} is al gekoppeld", false, false)
+        is Pairing.ByIp.NotFound -> ByIpLine("Geen laptop gevonden op ${r.host} binnen ${Pairing.SEARCH_MS / 1000} s. " +
+            "Draait kdeconnectd en klopt het IP?", true, false)
+        is Pairing.ByIp.Failed -> ByIpLine(r.message, true, false)
     }
 
     private fun update(): Update? {
@@ -248,7 +281,7 @@ class HomeActivity : AppCompatActivity() {
             }
             s.update?.let { UpdateCard(it) }
             if (s.setup.isNotEmpty()) Setup(s.setup)
-            if (s.laptop == null) Pairing(s.candidates) else LaptopCard(s.laptop)
+            if (s.laptop == null) PairingCard(s.candidates, s.byIp) else LaptopCard(s.laptop)
             InternetCard(s)
             ConnectionCard(s)
             if (s.laptop != null) NotificationsCard(s.laptop, s.notifyAccess)
@@ -287,24 +320,67 @@ class HomeActivity : AppCompatActivity() {
     }
 
     @Composable
-    private fun Pairing(candidates: List<Candidate>) = Section("Laptop koppelen") {
+    private fun PairingCard(candidates: List<Candidate>, byIp: ByIpLine?) = Section("Laptop koppelen") {
         if (candidates.isEmpty()) {
-            Line("Geen laptop gevonden. Start kdeconnectd op je laptop. Zitten jullie niet op hetzelfde netwerk, voeg dan het Tailscale-IP van je laptop toe via Geavanceerde instellingen → Apparaat toevoegen via IP.")
+            Line("Geen laptop gevonden. Start kdeconnectd op je laptop. Niet op hetzelfde netwerk, of is je telefoon de hotspot? Vul hieronder het IP van je laptop in (bijv. het Tailscale-IP).")
+            AddByIp(searching = byIp?.searching == true)
         }
-        candidates.forEach { c ->
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(c.name, Modifier.weight(1f))
-                when (c.state) {
-                    PairState.RequestedByPeer -> {
-                        TextButton({ log.i("pairing with ${c.name}: rejected"); device(c.id)?.cancelPairing() }) { Text("Weigeren") }
-                        Button({ log.i("pairing with ${c.name}: accepted"); WsConnect.setLaptop(this@HomeActivity, c.id); device(c.id)?.acceptPairing() }) { Text("Accepteren") }
-                    }
-                    PairState.Requested -> Text("Wacht op laptop…", style = MaterialTheme.typography.labelMedium)
-                    else -> Button({ log.i("pairing with ${c.name}: requested"); WsConnect.setLaptop(this@HomeActivity, c.id); device(c.id)?.requestPairing() }) { Text("Koppelen") }
+        byIp?.let { ByIpResult(it) }
+        candidates.forEach { c -> CandidateRow(c) }
+    }
+
+    @Composable
+    private fun AddByIp(searching: Boolean) {
+        var text by rememberSaveable { mutableStateOf("") }
+        var error by rememberSaveable { mutableStateOf<String?>(null) }
+        val submit = {
+            log.i("add by IP: submitted from home")
+            error = Pairing.addByIp(this@HomeActivity, text)
+        }
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(
+                text, { text = it; error = null }, Modifier.weight(1f),
+                label = { Text("IP van laptop") }, placeholder = { Text("100.64.0.2") }, singleLine = true,
+                isError = error != null,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { if (text.isNotBlank() && !searching) submit() }),
+            )
+            Button(submit, enabled = text.isNotBlank() && !searching) { Text("Toevoegen") }
+        }
+        error?.let { Line(it, warn = true) }
+    }
+
+    @Composable
+    private fun ByIpResult(r: ByIpLine) = Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.weight(1f)) { Line(r.text, r.warn) }
+        if (!r.searching) TextButton({ Pairing.dismissByIp(); bump() }) { Text("Sluiten") }
+    }
+
+    @Composable
+    private fun CandidateRow(c: Candidate) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(c.name, Modifier.weight(1f))
+            when (c.state) {
+                PairState.RequestedByPeer -> {
+                    TextButton({ Pairing.cancel(c.id, "home reject"); bump() }) { Text("Weigeren") }
+                    Button({ Pairing.accept(this@HomeActivity, c.id); bump() }) { Text("Accepteren") }
                 }
+                PairState.Requested -> Text(
+                    "Wacht op laptop…" + (c.waitedMs?.let { " (nog ${PairingLogic.secondsLeft(Pairing.PEER_TIMEOUT_MS, it)} s)" } ?: ""),
+                    style = MaterialTheme.typography.labelMedium,
+                )
+                else -> Button({ Pairing.request(this@HomeActivity, c.id, "home button"); bump() }) { Text("Koppelen") }
             }
-            if (c.state != PairState.NotPaired && c.code != null) Line("Controlecode: ${c.code}")
         }
+        if (c.state == PairState.Requested) {
+            Line("Accepteer op de laptop. Daar al geaccepteerd en blijft dit staan? Vraag opnieuw.")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton({ Pairing.cancel(c.id, "home cancel"); bump() }) { Text("Annuleren") }
+                OutlinedButton({ Pairing.request(this@HomeActivity, c.id, "home retry"); bump() }) { Text("Opnieuw vragen") }
+            }
+        }
+        if (c.state != PairState.NotPaired && c.code != null) Line("Controlecode: ${c.code}")
+        c.failure?.let { Line("Mislukt: $it", warn = true) }
     }
 
     @Composable

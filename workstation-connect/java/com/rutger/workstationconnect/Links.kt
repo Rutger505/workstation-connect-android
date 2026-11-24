@@ -2,6 +2,8 @@
 package com.rutger.workstationconnect
 
 import android.content.Context
+import java.net.InetAddress
+import java.net.Socket
 import org.kde.kdeconnect.Device
 import org.kde.kdeconnect.backends.BaseLink
 import org.kde.kdeconnect.backends.bluetooth.BluetoothLink
@@ -27,6 +29,18 @@ object Links {
     fun of(d: Device): List<BaseLink> =
         (runCatching { field?.get(d) as? List<*> }.onFailure { log.w("reading Device.links of ${d.name}", it) }.getOrNull()
             ?: emptyList<Any>()).filterIsInstance<BaseLink>()
+
+    private val lanSocket by lazy {
+        runCatching { LanLink::class.java.getDeclaredField("socket").apply { isAccessible = true } }
+            .onFailure { log.e("LanLink.socket not found, add-by-IP can't match addresses (upstream changed?)", it) }
+            .getOrNull()
+    }
+
+    /** Remote addresses of [d]'s LAN links (private `LanLink.socket`, reflection like [of]). */
+    fun lanAddresses(d: Device): List<InetAddress> = of(d).filterIsInstance<LanLink>().mapNotNull { link ->
+        runCatching { (lanSocket?.get(link) as? Socket)?.inetAddress }
+            .onFailure { log.w("reading LanLink.socket of ${d.name}", it) }.getOrNull()
+    }
 
     /** The link packets go over: the first one, like Device.sendPacketBlocking. Null when unreachable. */
     fun via(d: Device): Via? = when (of(d).firstOrNull()) {
