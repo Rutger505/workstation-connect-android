@@ -20,6 +20,8 @@ notifications, clipboard, files). Laptop side: [Rutger505/workstation-connect](h
   - `src/main/java/org/kde/kdeconnect/ui/SettingsFragment.kt`: Bluetooth switch removed (always on, forced in `WsConnect.init`)
   - `src/main/java/org/kde/kdeconnect/BackgroundService.kt`: `createForegroundNotification` public, returns via `StatusNotification.decorate`
     (one ongoing notification, ID 1, shared with `LinkService`: title KDE Connect status, text laptop link, upstream's actions)
+  - `src/main/java/org/kde/kdeconnect/backends/lan/LanLinkProvider.kt`: `updateCustomDevicesList` adds `Tailscale.laptopAddresses`,
+    its pref listener also fires on `Tailscale.PREF_KEY` (see "Tailscale")
 - No hook, but upstream internals read by reflection: `Device.links` (private) in `workstation-connect/.../Links.kt` (link type on Home,
   dropping the laptop's LAN link on `CMD_NET_CHANGED`) and `LanLink.socket` (remote address, add-by-IP). Check the fields still exist after an upstream merge
 - Bytecode, no source hook: `build-logic` `WsKdeLogFactory` (AGP ASM instrumentation) rewrites `android.util.Log.{v,d,i,w,e,wtf,println}`
@@ -37,12 +39,23 @@ notifications, clipboard, files). Laptop side: [Rutger505/workstation-connect](h
 
 ## Link (LinkService)
 
-- Wire protocol (v5, classic Bluetooth RFCOMM): single source in the laptop repo README
-  ([Protocol v5](https://github.com/Rutger505/workstation-connect#how-it-works)); constants in `workstation-connect/.../Proto.kt`, keep in sync with the laptop's `proto.rs`
+- Wire protocol (v6, classic Bluetooth RFCOMM): single source in the laptop repo README
+  ([Protocol v6](https://github.com/Rutger505/workstation-connect#how-it-works)); constants in `workstation-connect/.../Proto.kt`, keep in sync with the laptop's `proto.rs`
 - `LinkService` = RFCOMM server (`listenUsingRfcommWithServiceRecord`, secure: bonded + encrypted only); the laptop pages the phone, no advertising
 - Multiple clients (laptop + desktop): one reader thread + one writer per socket, an I/O error closes only that client.
   Accept failure while Bluetooth is on → server reopened with backoff (2 s doubling to 60 s)
 - Retired commands 2/4: logged + ignored. Last client gone 3 min while wanted → hotspot off
+
+## Tailscale
+
+- KDE Connect without shared LAN (eduroam client isolation): both sides always on Tailscale, swap IPv4s over the link (`Tailscale.kt`)
+- Ours: up interface with an IPv4 in 100.64.0.0/10 (tun0), re-read on VPN network callbacks (`LinkService`) + 10 min tick;
+  bytes 4-7 of every state frame, change → state frame + `ForceRefreshConnections`
+- Laptops': cmd 6 per client, stored by Bluetooth address in pref `wsconnect_tailscale_laptops` (upstream's default prefs file,
+  never upstream's custom device list), 0.0.0.0 = removed, kept across restarts. LanLinkProvider merges them into its custom
+  devices: identity sent there, and their packets pass `isAllowedAddress` (100.64/10 isn't private). Change → rebroadcast
+- Upstream's `broadcastUdpIdentityPacket(network)` binds to the network that came up: a Wi-Fi bind may not reach 100.x;
+  the VPN's own onAvailable and our refreshes (network null, default route = VPN) cover it
 
 ## Pairing (Home)
 

@@ -16,6 +16,11 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.ServiceInfo
+import android.net.ConnectivityManager
+import android.net.LinkProperties
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.os.BatteryManager
 import android.os.Handler
 import android.os.Looper
@@ -74,6 +79,7 @@ class LinkService : Service() {
     private val tick = object : Runnable {
         override fun run() {
             Updater.checkAsync()
+            refreshTailscale() // backup for a missed VPN callback
             LogUpload.trigger(Reason.PERIODIC)
             main.postDelayed(this, TICK_MS)
         }
@@ -114,6 +120,13 @@ class LinkService : Service() {
         }
     }
 
+    /** VPN networks (Tailscale): our Tailscale IP may have changed → state frame + identity rebroadcast. */
+    private val vpnCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) { main.post(::refreshTailscale) }
+        override fun onLost(network: Network) { main.post(::refreshTailscale); main.postDelayed(::refreshTailscale, 2_000) } // tun0 may linger
+        override fun onLinkPropertiesChanged(network: Network, lp: LinkProperties) { main.post(::refreshTailscale) }
+    }
+
     override fun onBind(intent: Intent?) = null
 
     override fun onCreate() {
@@ -134,6 +147,12 @@ class LinkService : Service() {
         runCatching {
             getSystemService(TelephonyManager::class.java).registerTelephonyCallback(mainExecutor, signalCallback)
         }.onFailure { log.w("signal listener not registered, signal stays unknown", it) }
+        Tailscale.refreshOwn()
+        runCatching {
+            getSystemService(ConnectivityManager::class.java).registerNetworkCallback(NetworkRequest.Builder()
+                .removeCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
+                .addTransportType(NetworkCapabilities.TRANSPORT_VPN).build(), vpnCallback)
+        }.onFailure { log.w("vpn callback not registered, own tailscale ip only checked every ${TICK_MS / 60000} min", it) }
         Tether.listen(tetherListener)
         Tether.bind()
         checkShizuku()
@@ -157,6 +176,8 @@ class LinkService : Service() {
         runCatching { unregisterReceiver(receiver) }.onFailure { log.w("unregister receiver", it) }
         runCatching { getSystemService(TelephonyManager::class.java).unregisterTelephonyCallback(signalCallback) }
             .onFailure { log.d("unregister signal listener: ${it.javaClass.simpleName}") } // never registered
+        runCatching { getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(vpnCallback) }
+            .onFailure { log.d("unregister vpn callback: ${it.javaClass.simpleName}") } // never registered
         stopServer()
         closeClients("service stopped")
         clientLabels = emptyList()
@@ -238,7 +259,7 @@ class LinkService : Service() {
             return
         }
         backoffMs = BACKOFF_MIN_MS
-        val c = Client(socket, "${device.address}/${runCatching { device.name }.getOrNull() ?: "?"}")
+        val c = Client(socket, device.address, "${device.address}/${runCatching { device.name }.getOrNull() ?: "?"}")
         clients.add(c)
         clientsChanged()
         main.removeCallbacks(goneTimeout)
@@ -277,7 +298,8 @@ class LinkService : Service() {
     private fun closeClients(reason: String) = clients.forEach { it.close(reason) }
 
     /** Main thread only. */
-    private fun command(c: Client, cmd: Byte) {
+    private fun command(c: Client, payload: ByteArray) {
+        val cmd = payload[0]
         if (cmd != Proto.CMD_PING) c.received++
         when (cmd) {
             Proto.CMD_ON -> { log.i("laptop: on (${c.label})"); Tether.on("laptop") }
@@ -287,6 +309,9 @@ class LinkService : Service() {
                 if (!c.pinged) { c.pinged = true; log.d("first ping from ${c.label}") }
                 c.send(stateBytes())
             }
+            Proto.CMD_TAILSCALE_ADDR ->
+                if (payload.size < 5) log.w("laptop: tailscale-addr frame of ${payload.size} bytes ignored (${c.label})")
+                else Tailscale.laptopSent(this, c.address, payload.copyOfRange(1, 5))
             Proto.CMD_RETIRED_BT_OFF, Proto.CMD_RETIRED_ON_BT ->
                 log.w("laptop: ${Proto.cmdName(cmd)} command ignored (${c.label}, old laptop app?)")
             else -> log.w("laptop: ${Proto.cmdName(cmd)} command ignored (${c.label}, newer laptop app?)")
@@ -304,7 +329,7 @@ class LinkService : Service() {
      * One connected laptop. Reads frames on its own thread, writes on its own single-thread executor
      * (a stalled peer can't block the main thread or other clients). Any I/O error closes just this one.
      */
-    private inner class Client(val socket: BluetoothSocket, val label: String) {
+    private inner class Client(val socket: BluetoothSocket, val address: String, val label: String) {
         private val closed = AtomicBoolean(false)
         val since = System.currentTimeMillis()
         @Volatile var reason = "closed"
@@ -321,10 +346,9 @@ class LinkService : Service() {
                     val len = input.readUnsignedByte()
                     if (len == 0) continue // keepalive
                     val payload = ByteArray(len).also(input::readFully)
-                    // Commands are 1 byte; a longer frame from a newer laptop: act on the first byte.
-                    if (len > 1) log.d("frame of $len bytes from $label: acting on the first byte")
-                    if (payload[0] != Proto.CMD_PING) log.d("frame ← $label: ${Proto.cmdName(payload[0])}")
-                    main.post { if (!closed.get()) command(this, payload[0]) else log.d("command after close dropped ($label)") }
+                    // Command byte first, then its arguments (extra bytes from a newer laptop: ignored by [command])
+                    if (payload[0] != Proto.CMD_PING) log.d("frame ← $label: ${Proto.cmdName(payload[0])} ($len bytes)")
+                    main.post { if (!closed.get()) command(this, payload) else log.d("command after close dropped ($label)") }
                 }
             } catch (e: IOException) {
                 if (!closed.get()) return close("read ended: ${e.message}")
@@ -368,7 +392,14 @@ class LinkService : Service() {
         if (Tether.hotspotOn) flags = flags or Proto.FLAG_HOTSPOT
         if (Tether.wanted) flags = flags or Proto.FLAG_WANTED
         if (Tether.lastError) flags = flags or Proto.FLAG_ERROR
-        return byteArrayOf(flags.toByte(), battery.toByte(), signal.toByte(), Proto.VERSION)
+        return byteArrayOf(flags.toByte(), battery.toByte(), signal.toByte(), Proto.VERSION) + Tailscale.ownBytes()
+    }
+
+    /** Main thread only. Re-reads our Tailscale IP; on change: state frame + identity to the laptops' Tailscale IPs. */
+    private fun refreshTailscale() {
+        if (!running || !Tailscale.refreshOwn()) return
+        pushState()
+        Tailscale.rebroadcastIfLaptops(this)
     }
 
     /** Main thread only. Sends the state to every client when it changed. */
@@ -378,7 +409,7 @@ class LinkService : Service() {
         val old = lastSent
         lastSent = value
         // battery-only changes: no line (every percent would be one)
-        if (old == null || old[0] != value[0] || old[2] != value[2]) log.d("state → ${clients.size} client(s): ${Proto.stateString(value)}")
+        if (old == null || old[0] != value[0] || old[2] != value[2] || !old.copyOfRange(4, 8).contentEquals(value.copyOfRange(4, 8))) log.d("state → ${clients.size} client(s): ${Proto.stateString(value)}")
         clients.forEach { it.send(value) }
     }
 

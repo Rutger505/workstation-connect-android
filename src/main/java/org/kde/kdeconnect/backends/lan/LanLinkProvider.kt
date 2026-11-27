@@ -69,7 +69,8 @@ class LanLinkProvider(private val context: Context) : BaseLinkProvider() {
     private var customDeviceAddresses = emptyList<InetAddress>()
 
     private val customDeviceListener = OnSharedPreferenceChangeListener { _, key ->
-        if (key == CustomDevicesActivity.KEY_CUSTOM_DEVICE_LIST_PREFERENCE) {
+        if (key == CustomDevicesActivity.KEY_CUSTOM_DEVICE_LIST_PREFERENCE ||
+            key == com.rutger.workstationconnect.Tailscale.PREF_KEY) { // workstation-connect: laptops' Tailscale IPs
             updateCustomDevicesList()
         }
     }
@@ -79,7 +80,7 @@ class LanLinkProvider(private val context: Context) : BaseLinkProvider() {
             runCatching {
                 InetAddress.getAllByName(it.host).toList()
             }.getOrDefault(emptyList())
-        }
+        } + com.rutger.workstationconnect.Tailscale.laptopAddresses(context) // workstation-connect: laptops' Tailscale IPs
     }
 
     @Volatile

@@ -2,7 +2,7 @@
 
 Fork of KDE Connect Android (GPL) = phone side of workstation-connect: own home screen, auto hotspot (Bluetooth RFCOMM control link + Shizuku tethering), trackpad.
 `WORKSTATION-CONNECT.md` = layout, upstream hooks, upstream merges, build, updates + publish, log upload, emulator test. `README.md` is upstream's: don't edit.
-Link protocol: single source in the laptop repo README (Rutger505/workstation-connect, "Protocol v5"); change it there + `Proto.kt` + `proto.rs` together, bump `Proto.VERSION`.
+Link protocol: single source in the laptop repo README (Rutger505/workstation-connect, "Protocol v6"); change it there + `Proto.kt` + `proto.rs` together, bump `Proto.VERSION`.
 
 ## Rules
 
